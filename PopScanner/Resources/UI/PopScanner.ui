@@ -101,10 +101,10 @@
       <bool>false</bool>
      </property>
      <property name="toolTip">
-      <string>Run the algorithm.</string>
+      <string>Apply landmark registration to align models.</string>
      </property>
      <property name="text">
-      <string>Apply</string>
+      <string>Apply Landmark Registration</string>
      </property>
     </widget>
    </item>
@@ -154,5 +154,17 @@
  </customwidgets>
  <resources/>
  <connections>
+  <connection>
+   <sender>PopScanner</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>armMarkupsWidget</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+  </connection>
+  <connection>
+   <sender>PopScanner</sender>
+   <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
+   <receiver>prostheticMarkupsWidget</receiver>
+   <slot>setMRMLScene(vtkMRMLScene*)</slot>
+  </connection>
  </connections>
 </ui>
