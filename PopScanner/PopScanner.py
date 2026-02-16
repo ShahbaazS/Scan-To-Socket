@@ -32,24 +32,24 @@ class PopScanner(ScriptedLoadableModule):
 
     def __init__(self, parent):
         ScriptedLoadableModule.__init__(self, parent)
-        self.parent.title = _("PopScanner")  # TODO: make this more human readable by adding spaces
-        # TODO: set categories (folders where the module shows up in the module selector)
+        self.parent.title = _("PopScanner")
         self.parent.categories = [translate("qSlicerAbstractCoreModule", "Examples")]
-        self.parent.dependencies = []  # TODO: add here list of module names that this module requires
-        self.parent.contributors = ["John Doe (AnyWare Corp.)"]  # TODO: replace with "Firstname Lastname (Organization)"
-        # TODO: update with short description of the module and a link to online module documentation
-        # _() function marks text as translatable to other languages
-        self.parent.helpText = _("""
-This is an example of scripted loadable module bundled in an extension.
-See more information in <a href="https://github.com/organization/projectname#PopScanner">module documentation</a>.
-""")
-        # TODO: replace with organization, grant and thanks
-        self.parent.acknowledgementText = _("""
-This file was originally developed by Jean-Christophe Fillion-Robin, Kitware Inc., Andras Lasso, PerkLab,
-and Steve Pieper, Isomics, Inc. and was partially funded by NIH grant 3P41RR013218-12S1.
-""")
+        self.parent.dependencies = []
+        self.parent.contributors = ["Emese Elkind, Shahbaaz Siddiqui"]
+        self.parent.helpText = _("Module developed by Q-CAR for above-elbow prosthetic alignment.")
+        self.parent.acknowledgementText = _("Developed by Q-CARE.")
 
-        # Additional initialization step after application startup is complete
+        # --- ADD THESE LINES FOR THE LOGO ---
+        moduleDir = os.path.dirname(os.path.abspath(__file__))
+        # Assuming your logo is in a 'Resources/Icons' folder relative to this file
+        iconPath = os.path.join(moduleDir, 'Resources', 'Icons', 'qcare logo2.png')
+        
+        if os.path.exists(iconPath):
+            self.parent.icon = qt.QIcon(iconPath)
+        else:
+            logging.error(f"Logo not found at {iconPath}")
+        # -------------------------------------
+
         slicer.app.connect("startupCompleted()", registerSampleData)
 
 
