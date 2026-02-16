@@ -3,8 +3,10 @@ import os
 from typing import Annotated
 
 import vtk
+import qt
 
 import slicer
+from slicer import vtkMRMLModelNode
 from slicer.i18n import tr as _
 from slicer.i18n import translate
 from slicer.ScriptedLoadableModule import *
@@ -13,6 +15,7 @@ from slicer.parameterNodeWrapper import (
     parameterNodeWrapper,
     WithinRange,
 )
+from slicer import vtkMRMLMarkupsFiducialNode
 
 from slicer import vtkMRMLScalarVolumeNode
 
@@ -110,18 +113,18 @@ class PopScannerParameterNode:
     """
     The parameters needed by module.
 
-    inputVolume - The volume to threshold.
+    inputFilePath - Path to the STL or OBJ file to process.
     imageThreshold - The value at which to threshold the input volume.
     invertThreshold - If true, will invert the threshold.
     thresholdedVolume - The output volume that will contain the thresholded volume.
     invertedVolume - The output volume that will contain the inverted thresholded volume.
     """
 
-    inputVolume: vtkMRMLScalarVolumeNode
-    imageThreshold: Annotated[float, WithinRange(-100, 500)] = 100
-    invertThreshold: bool = False
-    thresholdedVolume: vtkMRMLScalarVolumeNode
-    invertedVolume: vtkMRMLScalarVolumeNode
+    inputFilePath: str
+    outputModel: vtkMRMLModelNode
+    # New nodes for registration
+    armLandmarks: vtkMRMLMarkupsFiducialNode
+    prostheticLandmarks: vtkMRMLMarkupsFiducialNode
 
 
 #
@@ -169,9 +172,44 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         # Buttons
         self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
+        self.ui.inputFileBrowseButton.connect("clicked(bool)", self.onBrowseInputFile)
 
         # Make sure parameter node is initialized (needed for module reload)
         self.initializeParameterNode()
+        
+        # Load the prosthetic elbow model at startup
+        self.loadProstheticModel()
+
+    def loadProstheticModel(self) -> None:
+        """Load the prosthetic elbow model at startup."""
+        # Get the path relative to this module
+        moduleDir = os.path.dirname(os.path.abspath(__file__))
+        prostheticModelPath = os.path.join(os.path.dirname(moduleDir), "elbow.stl")
+        
+        if not os.path.exists(prostheticModelPath):
+            slicer.util.errorDisplay(
+                f"Prosthetic model not found at:\n{prostheticModelPath}\n\n"
+                "Please ensure the elbow.stl file is in the correct location."
+            )
+            logging.error(f"Prosthetic model file not found: {prostheticModelPath}")
+            return
+        
+        try:
+            success, modelNode = slicer.util.loadModel(prostheticModelPath, returnNode=True)
+            if success and modelNode:
+                # Rename for clarity in the scene
+                modelNode.SetName("Prosthetic Elbow")
+                # Set color to green
+                displayNode = modelNode.GetDisplayNode()
+                if displayNode:
+                    displayNode.SetColor(0, 1, 0)  # Green: R=0, G=1, B=0
+                logging.info(f"Prosthetic model loaded successfully: {modelNode.GetName()}")
+            else:
+                slicer.util.errorDisplay("Failed to load the prosthetic model (elbow.stl).")
+                logging.error("Failed to load prosthetic model")
+        except Exception as e:
+            logging.error(f"Error loading prosthetic model: {str(e)}")
+            slicer.util.errorDisplay(f"Error loading prosthetic model:\n{str(e)}")
 
     def cleanup(self) -> None:
         """Called when the application closes and the module widget is destroyed."""
@@ -208,12 +246,6 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         self.setParameterNode(self.logic.getParameterNode())
 
-        # Select default input nodes if nothing is selected yet to save a few clicks for the user
-        if not self._parameterNode.inputVolume:
-            firstVolumeNode = slicer.mrmlScene.GetFirstNodeByClass("vtkMRMLScalarVolumeNode")
-            if firstVolumeNode:
-                self._parameterNode.inputVolume = firstVolumeNode
-
     def setParameterNode(self, inputParameterNode: PopScannerParameterNode | None) -> None:
         """
         Set and observe parameter node.
@@ -232,26 +264,53 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self._checkCanApply()
 
     def _checkCanApply(self, caller=None, event=None) -> None:
-        if self._parameterNode and self._parameterNode.inputVolume and self._parameterNode.thresholdedVolume:
-            self.ui.applyButton.toolTip = _("Compute output volume")
+        # Logic: Only enable if we have an input file AND both sets of landmarks have 3 points
+        armReady = self.ui.armMarkupsWidget.currentNode() and self.ui.armMarkupsWidget.currentNode().GetNumberOfControlPoints() >= 3
+        prosReady = self.ui.prostheticMarkupsWidget.currentNode() and self.ui.prostheticMarkupsWidget.currentNode().GetNumberOfControlPoints() >= 3
+        
+        if self._parameterNode and self._parameterNode.inputFilePath and armReady and prosReady:
+            self.ui.applyButton.text = _("Align Prosthetic")
             self.ui.applyButton.enabled = True
         else:
-            self.ui.applyButton.toolTip = _("Select input and output volume nodes")
+            self.ui.applyButton.text = _("Place 3 points on each model")
             self.ui.applyButton.enabled = False
 
     def onApplyButton(self) -> None:
         """Run processing when user clicks "Apply" button."""
         with slicer.util.tryWithErrorDisplay(_("Failed to compute results."), waitCursor=True):
-            # Compute output
-            self.logic.process(self.ui.inputSelector.currentNode(), self.ui.outputSelector.currentNode(),
-                               self.ui.imageThresholdSliderWidget.value, self.ui.invertOutputCheckBox.checked)
-
-            # Compute inverted output (if needed)
-            if self.ui.invertedOutputSelector.currentNode():
-                # If additional output volume is selected then result with inverted threshold is written there
-                self.logic.process(self.ui.inputSelector.currentNode(), self.ui.invertedOutputSelector.currentNode(),
-                                   self.ui.imageThresholdSliderWidget.value, not self.ui.invertOutputCheckBox.checked, showResult=False)
-
+            # Perform registration using arm and prosthetic landmarks
+            self.logic.process(
+                self._parameterNode.inputFilePath,
+                self.ui.armMarkupsWidget.currentNode(),
+                self.ui.prostheticMarkupsWidget.currentNode()
+            )
+    def onBrowseInputFile(self) -> None:
+        """Open file dialog to select STL or OBJ file."""
+        fileName = qt.QFileDialog.getOpenFileName(
+            None,
+            "Select STL or OBJ file",
+            "",
+            "Model files (*.stl *.obj);;All files (*)"
+        )
+        if fileName:
+            self.ui.inputFilePathEdit.setText(fileName)
+            self._parameterNode.inputFilePath = fileName
+            
+            # Load and display the model in the 3D scene
+            try:
+                success, modelNode = slicer.util.loadModel(fileName, returnNode=True)
+                if success and modelNode:
+                    # Set color to red
+                    displayNode = modelNode.GetDisplayNode()
+                    if displayNode:
+                        displayNode.SetColor(1, 0, 0)  # Red: R=1, G=0, B=0
+                    logging.info(f"Model loaded successfully: {modelNode.GetName()}")
+                    # The model is automatically added to the scene and visible
+                else:
+                    slicer.util.errorDisplay("Failed to load the selected file. Please check if it's a valid STL or OBJ file.")
+            except Exception as e:
+                logging.error(f"Error loading model: {str(e)}")
+                slicer.util.errorDisplay(f"Error loading model: {str(e)}")
 
 #
 # PopScannerLogic
@@ -275,43 +334,41 @@ class PopScannerLogic(ScriptedLoadableModuleLogic):
     def getParameterNode(self):
         return PopScannerParameterNode(super().getParameterNode())
 
-    def process(self,
-                inputVolume: vtkMRMLScalarVolumeNode,
-                outputVolume: vtkMRMLScalarVolumeNode,
-                imageThreshold: float,
-                invert: bool = False,
-                showResult: bool = True) -> None:
+    def process(self, inputFilePath: str, outputModel: vtkMRMLModelNode) -> None:
         """
-        Run the processing algorithm.
-        Can be used without GUI widget.
-        :param inputVolume: volume to be thresholded
-        :param outputVolume: thresholding result
-        :param imageThreshold: values above/below this threshold will be set to 0
-        :param invert: if True then values above the threshold will be set to 0, otherwise values below are set to 0
-        :param showResult: show output volume in slice viewers
+        Loads an STL, computes its orientation via PCA, and prepares it for registration.
         """
+        if not inputFilePath or not os.path.exists(inputFilePath):
+            raise ValueError("Input file path is invalid")
 
-        if not inputVolume or not outputVolume:
-            raise ValueError("Input or output volume is invalid")
+        # 1. Load the STL/OBJ file
+        # We use a specific model loader to ensure it's handled as a mesh
+        success, modelNode = slicer.util.loadModel(inputFilePath, returnNode=True)
+        if not success:
+            raise ValueError(f"Failed to load model from: {inputFilePath}")
 
-        import time
+        logging.info(f"Model loaded: {modelNode.GetName()}")
 
-        startTime = time.time()
-        logging.info("Processing started")
-
-        # Compute the thresholded output volume using the "Threshold Scalar Volume" CLI module
-        cliParams = {
-            "InputVolume": inputVolume.GetID(),
-            "OutputVolume": outputVolume.GetID(),
-            "ThresholdValue": imageThreshold,
-            "ThresholdType": "Above" if invert else "Below",
-        }
-        cliNode = slicer.cli.run(slicer.modules.thresholdscalarvolume, None, cliParams, wait_for_completion=True, update_display=showResult)
-        # We don't need the CLI module node anymore, remove it to not clutter the scene with it
-        slicer.mrmlScene.RemoveNode(cliNode)
-
-        stopTime = time.time()
-        logging.info(f"Processing completed in {stopTime-startTime:.2f} seconds")
+        # 2. PCA Orientation (Logic for your perpendicular circle plan)
+        # This finds the 'long' axis of the arm scan
+        import numpy as np
+        polyData = modelNode.GetPolyData()
+        points = polyData.GetPoints()
+        n_points = points.GetNumberOfPoints()
+        
+        # Convert VTK points to Numpy for PCA
+        point_array = np.array([points.GetPoint(i) for i in range(n_points)])
+        centroid = np.mean(point_array, axis=0)
+        
+        # Compute PCA using Singular Value Decomposition
+        datacenter = point_array - centroid
+        _, _, vh = np.linalg.svd(datacenter, full_matrices=False)
+        major_axis = vh[0] # This is the vector of the arm's length
+        
+        logging.info(f"Arm major axis computed: {major_axis}")
+        
+        # 3. Future Step: Landmark Registration
+        # You will use 'major_axis' to place your perpendicular circles here.
 
 
 #
@@ -352,6 +409,7 @@ class PopScannerTest(ScriptedLoadableModuleTest):
         # Get/create input data
 
         import SampleData
+        import tempfile
 
         registerSampleData()
         inputVolume = SampleData.downloadSample("PopScanner1")
@@ -361,6 +419,13 @@ class PopScannerTest(ScriptedLoadableModuleTest):
         self.assertEqual(inputScalarRange[0], 0)
         self.assertEqual(inputScalarRange[1], 695)
 
+        # Save input volume as a temporary STL file for testing file path input
+        tempDir = tempfile.gettempdir()
+        testFilePath = os.path.join(tempDir, "test_input.stl")
+        # Note: In production, you would convert the volume to a model and save as STL
+        # For this test, we'll use the volume directly via slicer's save function
+        slicer.util.saveNode(inputVolume, testFilePath)
+
         outputVolume = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode")
         threshold = 100
 
@@ -369,15 +434,19 @@ class PopScannerTest(ScriptedLoadableModuleTest):
         logic = PopScannerLogic()
 
         # Test algorithm with non-inverted threshold
-        logic.process(inputVolume, outputVolume, threshold, True)
+        logic.process(testFilePath, outputVolume, threshold, True)
         outputScalarRange = outputVolume.GetImageData().GetScalarRange()
         self.assertEqual(outputScalarRange[0], inputScalarRange[0])
         self.assertEqual(outputScalarRange[1], threshold)
 
         # Test algorithm with inverted threshold
-        logic.process(inputVolume, outputVolume, threshold, False)
+        logic.process(testFilePath, outputVolume, threshold, False)
         outputScalarRange = outputVolume.GetImageData().GetScalarRange()
         self.assertEqual(outputScalarRange[0], inputScalarRange[0])
         self.assertEqual(outputScalarRange[1], inputScalarRange[1])
+
+        # Clean up temporary file
+        if os.path.exists(testFilePath):
+            os.remove(testFilePath)
 
         self.delayDisplay("Test passed")
