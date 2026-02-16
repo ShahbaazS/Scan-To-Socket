@@ -33,7 +33,7 @@ class PopScanner(ScriptedLoadableModule):
     def __init__(self, parent):
         ScriptedLoadableModule.__init__(self, parent)
         self.parent.title = _("PopScanner")
-        self.parent.categories = [translate("qSlicerAbstractCoreModule", "Examples")]
+        self.parent.categories = [translate("qSlicerAbstractCoreModule", "Prosthetics")]
         self.parent.dependencies = []
         self.parent.contributors = ["Emese Elkind, Shahbaaz Siddiqui"]
         self.parent.helpText = _("Module developed by Q-CAR for above-elbow prosthetic alignment.")
