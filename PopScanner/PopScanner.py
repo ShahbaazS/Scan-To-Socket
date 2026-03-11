@@ -176,6 +176,13 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
     def loadProstheticModel(self) -> None:
         """Load the prosthetic elbow model at startup."""
         # Get the path relative to this module
+        
+        try:
+            if slicer.util.getNode("Prosthetic Elbow"):
+                return  # Exit early, don't load again
+        except:
+            pass
+        
         moduleDir = os.path.dirname(os.path.abspath(__file__))
         prostheticModelPath = os.path.join(os.path.dirname(moduleDir), "elbow.stl")
         
@@ -305,12 +312,12 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         """Run processing when user clicks "Apply" button."""
         slicer.app.layoutManager().setLayout(slicer.vtkMRMLLayoutNode.SlicerLayoutOneUp3DView)
         # Get the actual model node currently named "Patient Scan"
-        patientModel = slicer.util.getNode("Patient Scan")
+        prostheticModel = slicer.util.getNode("Prosthetic Elbow")
         armNode = self.ui.armMarkupsWidget.currentNode()
         prosNode = self.ui.prostheticMarkupsWidget.currentNode()
         
-        if patientModel and armNode and prosNode:
-            self.logic.process(patientModel, armNode, prosNode)
+        if prostheticModel and armNode and prosNode:
+            self.logic.process(prostheticModel, armNode, prosNode)
         else:
             slicer.util.errorDisplay("Make sure 'Patient Scan' is loaded and 3 points are placed.")
 
@@ -384,11 +391,11 @@ class PopScannerLogic(ScriptedLoadableModuleLogic):
     def getParameterNode(self):
         return PopScannerParameterNode(super().getParameterNode())
 
-    def process(self, patientModelNode, armLandmarks, prostheticLandmarks) -> None:
+    def process(self, prostheticModelNode, armLandmarks, prostheticLandmarks) -> None:
         """
         Calculates and applies the transformation matrix.
         """
-        if not patientModelNode or not armLandmarks or not prostheticLandmarks:
+        if not prostheticModelNode or not armLandmarks or not prostheticLandmarks:
             logging.warning("Missing required nodes for alignment.")
             return
 
@@ -405,9 +412,9 @@ class PopScannerLogic(ScriptedLoadableModuleLogic):
             targetPoints.InsertNextPoint(p_target)
 
         landmarkTransform = vtk.vtkLandmarkTransform()
-        landmarkTransform.SetSourceLandmarks(sourcePoints)
-        landmarkTransform.SetTargetLandmarks(targetPoints)
-        landmarkTransform.SetModeToRigidBody() # Only Rotate and Translate (no stretching)
+        landmarkTransform.SetSourceLandmarks(targetPoints)
+        landmarkTransform.SetTargetLandmarks(sourcePoints)
+        landmarkTransform.SetModeToSimilarity() # Only Rotate and Translate (no stretching)
         landmarkTransform.Update()
 
         transformNode = slicer.mrmlScene.GetFirstNodeByName("AlignmentTransform")
@@ -417,7 +424,7 @@ class PopScannerLogic(ScriptedLoadableModuleLogic):
         transformNode.SetAndObserveMatrixTransformToParent(landmarkTransform.GetMatrix())
         
         # 4. Snap the Patient Scan to this Transform
-        patientModelNode.SetAndObserveTransformNodeID(transformNode.GetID())
+        prostheticModelNode.SetAndObserveTransformNodeID(transformNode.GetID())
         
         # 5. Force UI to refresh the 3D view
         slicer.util.resetThreeDViews()
