@@ -4,6 +4,8 @@ from typing import Annotated
 
 import vtk
 import qt
+import numpy as np
+import math
 
 import slicer
 from slicer import vtkMRMLModelNode
@@ -159,16 +161,25 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.onSceneEndClose)
 
-        # Buttons
+        self.distanceSpinBox = qt.QDoubleSpinBox()
+        self.distanceSpinBox.setRange(0.0, 500.0)
+        self.distanceSpinBox.setValue(150.0) # Default extension distance
+        self.distanceSpinBox.setSuffix(" mm")
+        self.distanceSpinBox.setToolTip("Distance from the bottom of the stump to the elbow joint.")
+        
+        distanceLayout = qt.QHBoxLayout()
+        distanceLayout.addWidget(qt.QLabel("Extension Distance:"))
+        distanceLayout.addWidget(self.distanceSpinBox)
+        
+        # Insert right above the Apply button
+        applyButtonLayout = self.ui.applyButton.parent().layout()
+        applyButtonLayout.insertLayout(applyButtonLayout.count() - 1, distanceLayout)
+
         self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
         self.ui.inputFileBrowseButton.connect("clicked(bool)", self.onBrowseInputFile)
         
-        # --- Connections for reactivity ---
         self.ui.armMarkupsWidget.connect("markupsNodeChanged()", self._onArmMarkupsNodeChanged)
-        self.ui.prostheticMarkupsWidget.connect("markupsNodeChanged()", self._onProstheticMarkupsNodeChanged)
-        
         self.ui.armMarkupsWidget.connect("activeMarkupsNodeChanged(vtkMRMLNode*)", self._onArmMarkupsNodeChanged)
-        self.ui.prostheticMarkupsWidget.connect("activeMarkupsNodeChanged(vtkMRMLNode*)", self._onProstheticMarkupsNodeChanged)
 
         self.initializeParameterNode()
         self.loadProstheticModel()
@@ -279,45 +290,37 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self._checkCanApply()
     
     def _onArmMarkupsNodeChanged(self) -> None:
-        """Called when arm markup node changes."""
         armNode = self.ui.armMarkupsWidget.currentNode()
         if armNode:
-            # Set the limit on the data node itself
             armNode.SetMaximumNumberOfControlPoints(3)
             self.addObserver(armNode, vtk.vtkCommand.ModifiedEvent, self._checkCanApply)
         self._checkCanApply()
     
     def _onProstheticMarkupsNodeChanged(self) -> None:
-        """Called when prosthetic markup node changes."""
-        prosNode = self.ui.prostheticMarkupsWidget.currentNode()
-        if prosNode:
-            # Set the limit on the data node itself
-            prosNode.SetMaximumNumberOfControlPoints(3)
-            self.addObserver(prosNode, vtk.vtkCommand.ModifiedEvent, self._checkCanApply)
-        self._checkCanApply()
+        # ignore
+        pass
 
     def _checkCanApply(self, caller=None, event=None) -> None:
-        # Logic: Only enable if we have an input file AND both sets of landmarks have 3 points
-        armReady = self.ui.armMarkupsWidget.currentNode() and self.ui.armMarkupsWidget.currentNode().GetNumberOfControlPoints() >= 3
-        prosReady = self.ui.prostheticMarkupsWidget.currentNode() and self.ui.prostheticMarkupsWidget.currentNode().GetNumberOfControlPoints() >= 3
+        # Logic: Only enable if we have an input file AND the patient arm has exactly 3 points
+        armReady = self.ui.armMarkupsWidget.currentNode() and self.ui.armMarkupsWidget.currentNode().GetNumberOfControlPoints() == 3
         
-        if self._parameterNode and self._parameterNode.inputFilePath and armReady and prosReady:
-            self.ui.applyButton.text = _("Apply Landmark Registration")
+        if self._parameterNode and self._parameterNode.inputFilePath and armReady:
+            self.ui.applyButton.text = _("Generate Prosthetic Socket")
             self.ui.applyButton.enabled = True
         else:
-            self.ui.applyButton.text = _("Place 3 points on each model")
+            self.ui.applyButton.text = _("Place 3 points on Patient Arm")
             self.ui.applyButton.enabled = False
 
     def onApplyButton(self) -> None:
-        """Run processing when user clicks "Apply" button."""
         slicer.app.layoutManager().setLayout(slicer.vtkMRMLLayoutNode.SlicerLayoutOneUp3DView)
-        # Get the actual model node currently named "Patient Scan"
+        patientModel = slicer.util.getNode("Patient Scan")
         prostheticModel = slicer.util.getNode("Prosthetic Elbow")
         armNode = self.ui.armMarkupsWidget.currentNode()
-        prosNode = self.ui.prostheticMarkupsWidget.currentNode()
         
-        if prostheticModel and armNode and prosNode:
-            self.logic.process(prostheticModel, armNode, prosNode)
+        if patientModel and prostheticModel and armNode:
+            # Pass the user-inputted distance into the logic
+            target_distance = self.distanceSpinBox.value
+            self.logic.process(patientModel, armNode, prostheticModel, target_distance)
         else:
             slicer.util.errorDisplay("Make sure 'Patient Scan' is loaded and 3 points are placed.")
 
@@ -391,42 +394,189 @@ class PopScannerLogic(ScriptedLoadableModuleLogic):
     def getParameterNode(self):
         return PopScannerParameterNode(super().getParameterNode())
 
-    def process(self, prostheticModelNode, armLandmarks, prostheticLandmarks) -> None:
-        """
-        Calculates and applies the transformation matrix.
-        """
-        if not prostheticModelNode or not armLandmarks or not prostheticLandmarks:
-            logging.warning("Missing required nodes for alignment.")
+    def process(self, patientModelNode, armLandmarks, elbowModelNode, offset_distance) -> None:
+
+        if armLandmarks.GetNumberOfControlPoints() < 3:
+            logging.error("Please place exactly 3 points: Shoulder, Stump Center, Stump Edge.")
             return
 
-        # Extract Coordinates (1->1, 2->2, 3->3)
-        sourcePoints = vtk.vtkPoints() # Red (Patient)
-        targetPoints = vtk.vtkPoints() # Green (Prosthetic)
+        # Extract the 3 Points
+        p0_shoulder = np.zeros(3)
+        p1_stump_center = np.zeros(3)
+        p2_stump_edge = np.zeros(3)
+
+        armLandmarks.GetNthControlPointPosition(0, p0_shoulder)
+        armLandmarks.GetNthControlPointPosition(1, p1_stump_center)
+        armLandmarks.GetNthControlPointPosition(2, p2_stump_edge)
+
+        # Calculate Trajectory Vector (Z-Axis)
+        direction_vector = p1_stump_center - p0_shoulder
+        norm = np.linalg.norm(direction_vector)
+        if norm == 0:
+            logging.error("Shoulder and stump center points overlap.")
+            return
+        direction_vector = direction_vector / norm # Normalized Z-axis
+
+        # Calculate Orthogonal Scale (Point-to-Line Distance)
+        center_to_edge_vector = p2_stump_edge - p1_stump_center
+        cross_product = np.cross(center_to_edge_vector, direction_vector)
+        stump_radius = np.linalg.norm(cross_product)
         
+        # Set to exact radius of the top of the unscaled elbow.stl
+        cad_elbow_radius = 25.0 
+        scale_factor = stump_radius / cad_elbow_radius
+
+        # Calculate Target Position for the Elbow
+        # We move exactly 'offset_distance' mm down the trajectory vector
+        elbow_target_pos = p1_stump_center + (direction_vector * offset_distance)
+
+        # Build Orthonormal Rotation Matrix
+        z_axis = direction_vector
+        y_axis = np.cross(z_axis, center_to_edge_vector)
+        norm_y = np.linalg.norm(y_axis)
+        if norm_y > 0:
+            y_axis = y_axis / norm_y
+        else:
+            y_axis = np.array([0.0, 1.0, 0.0]) # Fallback if collinear
+            
+        x_axis = np.cross(y_axis, z_axis)
+        x_axis = x_axis / np.linalg.norm(x_axis)
+
+        rotation_matrix = vtk.vtkMatrix4x4()
         for i in range(3):
-            p_source = [0,0,0]
-            p_target = [0,0,0]
-            armLandmarks.GetNthControlPointPosition(i, p_source)
-            prostheticLandmarks.GetNthControlPointPosition(i, p_target)
-            sourcePoints.InsertNextPoint(p_source)
-            targetPoints.InsertNextPoint(p_target)
+            rotation_matrix.SetElement(i, 0, x_axis[i])
+            rotation_matrix.SetElement(i, 1, y_axis[i])
+            rotation_matrix.SetElement(i, 2, z_axis[i])
 
-        landmarkTransform = vtk.vtkLandmarkTransform()
-        landmarkTransform.SetSourceLandmarks(targetPoints)
-        landmarkTransform.SetTargetLandmarks(sourcePoints)
-        landmarkTransform.SetModeToSimilarity() # Only Rotate and Translate (no stretching)
-        landmarkTransform.Update()
+        # Apply Transforms (Translate -> Rotate -> Scale)
+        transform = vtk.vtkTransform()
+        transform.Translate(elbow_target_pos)
+        transform.Concatenate(rotation_matrix)
+        transform.RotateY(180)
+        transform.Scale(scale_factor, scale_factor, scale_factor)
 
-        transformNode = slicer.mrmlScene.GetFirstNodeByName("AlignmentTransform")
+        transformNode = slicer.mrmlScene.GetFirstNodeByName("MasterElbowTransform")
         if not transformNode:
-            transformNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLTransformNode", "AlignmentTransform")
+            transformNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLTransformNode", "MasterElbowTransform")
+            
+        transformNode.SetMatrixTransformToParent(transform.GetMatrix())
+        elbowModelNode.SetAndObserveTransformNodeID(transformNode.GetID())
+        slicer.vtkSlicerTransformLogic().hardenTransform(elbowModelNode)
         
-        transformNode.SetAndObserveMatrixTransformToParent(landmarkTransform.GetMatrix())
+        logging.info(f"Elbow aligned! Scale factor applied: {scale_factor:.2f}x")
         
-        # 4. Snap the Patient Scan to this Transform
-        prostheticModelNode.SetAndObserveTransformNodeID(transformNode.GetID())
+        # Proceed to Boolean Hollowing
+        self.generate_prosthetic_socket(patientModelNode, elbowModelNode, p1_stump_center, elbow_target_pos, offset_distance, stump_radius)
+
+    def generate_prosthetic_socket(self, patientModelNode, elbowModelNode, p1_stump_center, elbow_target_pos, offset_distance, stump_radius):
+
+        logging.info("Generating bridging cylinder and executing Booleans...")
+
+        # Generate the Bridging Cylinder
+        overlap_top = 50.0    # Plunge 50mm deep into the patient's stump
+        overlap_bottom = 15.0 # Plunge 15mm deep into the elbow CAD
         
-        # 5. Force UI to refresh the 3D view
+        total_height = offset_distance + overlap_top + overlap_bottom
+
+        cylinder = vtk.vtkCylinderSource()
+        cylinder.SetRadius(stump_radius * 1.1) # 10% wider than the stump
+        cylinder.SetHeight(total_height) 
+        cylinder.SetResolution(50)
+        cylinder.Update()
+
+        # Orient and Position the Cylinder
+        direction = elbow_target_pos - p1_stump_center
+        direction = direction / np.linalg.norm(direction)
+
+        default_axis = [0.0, 1.0, 0.0]
+        rotation_axis = np.cross(default_axis, direction)
+        rotation_axis = rotation_axis / np.linalg.norm(rotation_axis)
+        angle_rad = math.acos(np.dot(default_axis, direction))
+        angle_deg = math.degrees(angle_rad)
+
+        # Calculate the new asymmetric center point
+        top_point = p1_stump_center - (direction * overlap_top)
+        bottom_point = elbow_target_pos + (direction * overlap_bottom)
+        true_center = (top_point + bottom_point) / 2.0
+
+        cylTransform = vtk.vtkTransform()
+        cylTransform.Translate(true_center)
+        cylTransform.RotateWXYZ(angle_deg, rotation_axis)
+
+        transformFilter = vtk.vtkTransformPolyDataFilter()
+        transformFilter.SetInputData(cylinder.GetOutput())
+        transformFilter.SetTransform(cylTransform)
+        transformFilter.Update()
+
+        cylinderModelNode = slicer.modules.models.logic().AddModel(transformFilter.GetOutput())
+        cylinderModelNode.SetName("Bridge Cylinder")
+
+        # Execute Headless Booleans via Segmentations
+        segNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode", "SocketSegmentation")
+        segNode.CreateDefaultDisplayNodes()
+        
+        slicer.modules.segmentations.logic().ImportModelToSegmentationNode(patientModelNode, segNode)
+        slicer.modules.segmentations.logic().ImportModelToSegmentationNode(cylinderModelNode, segNode)
+        slicer.modules.segmentations.logic().ImportModelToSegmentationNode(elbowModelNode, segNode)
+
+        segmentation = segNode.GetSegmentation()
+        patientVoidID = segmentation.GetNthSegmentID(0)
+        cylinderID = segmentation.GetNthSegmentID(1)
+        elbowID = segmentation.GetNthSegmentID(2)
+
+        # Duplicate the Patient segment to create the outer Socket Blank
+        segmentation.CopySegmentFromSegmentation(segmentation, patientVoidID)
+        socketBlankID = segmentation.GetNthSegmentID(3)
+
+        segmentEditorWidget = slicer.qMRMLSegmentEditorWidget()
+        segmentEditorWidget.setMRMLScene(slicer.mrmlScene)
+        segmentEditorNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentEditorNode")
+        segmentEditorWidget.setMRMLSegmentEditorNode(segmentEditorNode)
+        segmentEditorWidget.setSegmentationNode(segNode)
+
+        # --- BOOLEAN OPERATIONS ---         
+        # Patient Void: Expand by 3mm for the prosthetic liner tolerance
+        segmentEditorNode.SetSelectedSegmentID(patientVoidID)
+        segmentEditorWidget.setActiveEffectByName("Margin")
+        effect = segmentEditorWidget.activeEffect()
+        effect.setParameter("MarginSizeMm", "3.0")
+        effect.self().onApply()
+
+        # Socket Blank: Expand by 8mm for structural wall thickness
+        segmentEditorNode.SetSelectedSegmentID(socketBlankID)
+        segmentEditorWidget.setActiveEffectByName("Margin")
+        effect = segmentEditorWidget.activeEffect()
+        effect.setParameter("MarginSizeMm", "8.0")
+        effect.self().onApply()
+
+        # Fusion: Merge Cylinder and Elbow into the Socket Blank
+        segmentEditorNode.SetSelectedSegmentID(socketBlankID)
+        segmentEditorWidget.setActiveEffectByName("Logical operators")
+        effect = segmentEditorWidget.activeEffect()
+        effect.setParameter("Operation", "UNION")
+        effect.setParameter("ModifierSegmentID", cylinderID)
+        effect.self().onApply()
+        effect.setParameter("ModifierSegmentID", elbowID)
+        effect.self().onApply()
+
+        # Subtraction: Carve the expanded Patient Void out of the solid block
+        segmentEditorNode.SetSelectedSegmentID(socketBlankID)
+        segmentEditorWidget.setActiveEffectByName("Logical operators")
+        effect = segmentEditorWidget.activeEffect()
+        effect.setParameter("Operation", "SUBTRACT")
+        effect.setParameter("ModifierSegmentID", patientVoidID)
+        effect.self().onApply()
+
+        # Cleanup Scene
+        patientModelNode.GetDisplayNode().SetVisibility(False)
+        cylinderModelNode.GetDisplayNode().SetVisibility(False)
+        elbowModelNode.GetDisplayNode().SetVisibility(False)
+        slicer.mrmlScene.RemoveNode(segmentEditorNode)
+        
+        # Export final segmentation to a 3D Model Node
+        slicer.modules.segmentations.logic().ExportAllSegmentsToModels(segNode, slicer.mrmlScene.GetSubjectHierarchyNode().GetSceneItemID())
+        
+        logging.info("Socket generation complete.")
         slicer.util.resetThreeDViews()
 #
 # PopScannerTest
