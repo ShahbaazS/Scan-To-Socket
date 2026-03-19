@@ -126,7 +126,6 @@ class PopScannerParameterNode:
     outputModel: vtkMRMLModelNode
     # New nodes for registration
     armLandmarks: vtkMRMLMarkupsFiducialNode
-    prostheticLandmarks: vtkMRMLMarkupsFiducialNode
 
 
 #
@@ -295,10 +294,6 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             armNode.SetMaximumNumberOfControlPoints(3)
             self.addObserver(armNode, vtk.vtkCommand.ModifiedEvent, self._checkCanApply)
         self._checkCanApply()
-    
-    def _onProstheticMarkupsNodeChanged(self) -> None:
-        # ignore
-        pass
 
     def _checkCanApply(self, caller=None, event=None) -> None:
         # Logic: Only enable if we have an input file AND the patient arm has exactly 3 points
@@ -341,9 +336,6 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             armNode = self.ui.armMarkupsWidget.currentNode()
             if armNode:
                 slicer.mrmlScene.RemoveNode(armNode)
-            prosNode = self.ui.prostheticMarkupsWidget.currentNode()
-            if prosNode:
-                slicer.mrmlScene.RemoveNode(prosNode)
             
             self.ui.inputFilePathEdit.setText(fileName)
             self._parameterNode.inputFilePath = fileName
