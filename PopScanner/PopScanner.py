@@ -238,7 +238,7 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         # 1. Switch to 100% 3D View
         layoutManager = slicer.app.layoutManager()
         if layoutManager:
-            layoutManager.setLayout(slicer.vtkMRMLLayoutNode.SlicerLayoutOne3DView)
+            layoutManager.setLayout(slicer.vtkMRMLLayoutNode.SlicerLayoutOneUp3DView)
             
         # 2. Optional: Center the camera on your models
         threeDWidget = layoutManager.threeDWidget(0)
@@ -461,115 +461,179 @@ class PopScannerLogic(ScriptedLoadableModuleLogic):
         self.generate_prosthetic_socket(patientModelNode, elbowModelNode, p1_stump_center, elbow_target_pos, offset_distance, stump_radius)
 
     def generate_prosthetic_socket(self, patientModelNode, elbowModelNode, p1_stump_center, elbow_target_pos, offset_distance, stump_radius):
+        import vtk
+        import slicer
+        import numpy as np
+        import math
+        import logging
+        import SimpleITK as sitk
+        import sitkUtils
 
-        logging.info("Generating bridging cylinder and executing Booleans...")
+        logging.info("Generating prosthetic socket via labelmap booleans...")
 
-        # Generate the Bridging Cylinder
-        overlap_top = 50.0    # Plunge 50mm deep into the patient's stump
-        overlap_bottom = 15.0 # Plunge 15mm deep into the elbow CAD
-        
-        total_height = offset_distance + overlap_top + overlap_bottom
+        # --- BRIDGING CYLINDER ---
+        overlap_top    = 50.0
+        overlap_bottom = 15.0
+        total_height   = offset_distance + overlap_top + overlap_bottom
 
         cylinder = vtk.vtkCylinderSource()
-        cylinder.SetRadius(stump_radius * 1.1) # 10% wider than the stump
-        cylinder.SetHeight(total_height) 
+        cylinder.SetRadius(stump_radius * 1.1)
+        cylinder.SetHeight(total_height)
         cylinder.SetResolution(50)
+        cylinder.SetCapping(True)
         cylinder.Update()
 
-        # Orient and Position the Cylinder
         direction = elbow_target_pos - p1_stump_center
         direction = direction / np.linalg.norm(direction)
-
-        default_axis = [0.0, 1.0, 0.0]
+        default_axis  = np.array([0.0, 1.0, 0.0])
         rotation_axis = np.cross(default_axis, direction)
-        rotation_axis = rotation_axis / np.linalg.norm(rotation_axis)
-        angle_rad = math.acos(np.dot(default_axis, direction))
-        angle_deg = math.degrees(angle_rad)
+        rot_norm      = np.linalg.norm(rotation_axis)
+        if rot_norm < 1e-6:
+            rotation_axis = np.array([1.0, 0.0, 0.0])
+            angle_deg = 0.0
+        else:
+            rotation_axis = rotation_axis / rot_norm
+            angle_deg = math.degrees(math.acos(np.clip(np.dot(default_axis, direction), -1.0, 1.0)))
 
-        # Calculate the new asymmetric center point
-        top_point = p1_stump_center - (direction * overlap_top)
+        top_point    = p1_stump_center - (direction * overlap_top)
         bottom_point = elbow_target_pos + (direction * overlap_bottom)
-        true_center = (top_point + bottom_point) / 2.0
+        true_center  = (top_point + bottom_point) / 2.0
 
         cylTransform = vtk.vtkTransform()
-        cylTransform.Translate(true_center)
-        cylTransform.RotateWXYZ(angle_deg, rotation_axis)
+        cylTransform.Translate(true_center.tolist())
+        cylTransform.RotateWXYZ(angle_deg, rotation_axis.tolist())
 
-        transformFilter = vtk.vtkTransformPolyDataFilter()
-        transformFilter.SetInputData(cylinder.GetOutput())
-        transformFilter.SetTransform(cylTransform)
-        transformFilter.Update()
+        tf = vtk.vtkTransformPolyDataFilter()
+        tf.SetInputData(cylinder.GetOutput())
+        tf.SetTransform(cylTransform)
+        tf.Update()
 
-        cylinderModelNode = slicer.modules.models.logic().AddModel(transformFilter.GetOutput())
+        cylinderModelNode = slicer.modules.models.logic().AddModel(tf.GetOutput())
         cylinderModelNode.SetName("Bridge Cylinder")
 
-        # Execute Headless Booleans via Segmentations
+        # --- BUILD SEGMENTATION ---
         segNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode", "SocketSegmentation")
         segNode.CreateDefaultDisplayNodes()
-        
+
         slicer.modules.segmentations.logic().ImportModelToSegmentationNode(patientModelNode, segNode)
         slicer.modules.segmentations.logic().ImportModelToSegmentationNode(cylinderModelNode, segNode)
         slicer.modules.segmentations.logic().ImportModelToSegmentationNode(elbowModelNode, segNode)
 
         segmentation = segNode.GetSegmentation()
-        patientVoidID = segmentation.GetNthSegmentID(0)
-        cylinderID = segmentation.GetNthSegmentID(1)
-        elbowID = segmentation.GetNthSegmentID(2)
+        patientVoidID = segmentation.GetSegmentIdBySegmentName(patientModelNode.GetName())
+        cylinderID    = segmentation.GetSegmentIdBySegmentName(cylinderModelNode.GetName())
+        elbowID       = segmentation.GetSegmentIdBySegmentName(elbowModelNode.GetName())
 
-        # Duplicate the Patient segment to create the outer Socket Blank
-        segmentation.CopySegmentFromSegmentation(segmentation, patientVoidID)
-        socketBlankID = segmentation.GetNthSegmentID(3)
+        if not patientVoidID or not cylinderID or not elbowID:
+            slicer.util.errorDisplay("Failed to import one or more models into segmentation.")
+            slicer.mrmlScene.RemoveNode(segNode)
+            return
 
-        segmentEditorWidget = slicer.qMRMLSegmentEditorWidget()
-        segmentEditorWidget.setMRMLScene(slicer.mrmlScene)
-        segmentEditorNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentEditorNode")
-        segmentEditorWidget.setMRMLSegmentEditorNode(segmentEditorNode)
-        segmentEditorWidget.setSegmentationNode(segNode)
+        # --- REFERENCE VOLUME ---
+        spacing = 1.0
+        bounds  = [0.0] * 6
+        segNode.GetRASBounds(bounds)
+        margin = 15.0
 
-        # --- BOOLEAN OPERATIONS ---         
-        # Patient Void: Expand by 3mm for the prosthetic liner tolerance
-        segmentEditorNode.SetSelectedSegmentID(patientVoidID)
-        segmentEditorWidget.setActiveEffectByName("Margin")
-        effect = segmentEditorWidget.activeEffect()
-        effect.setParameter("MarginSizeMm", "3.0")
-        effect.self().onApply()
+        origin = [bounds[0]-margin, bounds[2]-margin, bounds[4]-margin]
+        dims   = [
+            int((bounds[1]-bounds[0]+2*margin)/spacing)+1,
+            int((bounds[3]-bounds[2]+2*margin)/spacing)+1,
+            int((bounds[5]-bounds[4]+2*margin)/spacing)+1,
+        ]
+        logging.info(f"Reference volume dims: {dims}, origin: {origin}")
 
-        # Socket Blank: Expand by 8mm for structural wall thickness
-        segmentEditorNode.SetSelectedSegmentID(socketBlankID)
-        segmentEditorWidget.setActiveEffectByName("Margin")
-        effect = segmentEditorWidget.activeEffect()
-        effect.setParameter("MarginSizeMm", "8.0")
-        effect.self().onApply()
+        refArray = np.zeros([dims[2], dims[1], dims[0]], dtype=np.int16)
+        refVolumeNode = slicer.util.addVolumeFromArray(refArray)
+        refVolumeNode.SetName("TempRef")
+        refVolumeNode.SetSpacing(spacing, spacing, spacing)
+        refVolumeNode.SetOrigin(origin)
 
-        # Fusion: Merge Cylinder and Elbow into the Socket Blank
-        segmentEditorNode.SetSelectedSegmentID(socketBlankID)
-        segmentEditorWidget.setActiveEffectByName("Logical operators")
-        effect = segmentEditorWidget.activeEffect()
-        effect.setParameter("Operation", "UNION")
-        effect.setParameter("ModifierSegmentID", cylinderID)
-        effect.self().onApply()
-        effect.setParameter("ModifierSegmentID", elbowID)
-        effect.self().onApply()
+        # --- RASTERIZE EACH SEGMENT TO LABELMAP ARRAY ---
+        def seg_to_sitk(segID):
+            lm = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode")
+            ids = vtk.vtkStringArray()
+            ids.InsertNextValue(segID)
+            slicer.modules.segmentations.logic().ExportSegmentsToLabelmapNode(
+                segNode, ids, lm, refVolumeNode
+            )
+            img = sitkUtils.PullVolumeFromSlicer(lm)
+            slicer.mrmlScene.RemoveNode(lm)
+            return img
 
-        # Subtraction: Carve the expanded Patient Void out of the solid block
-        segmentEditorNode.SetSelectedSegmentID(socketBlankID)
-        segmentEditorWidget.setActiveEffectByName("Logical operators")
-        effect = segmentEditorWidget.activeEffect()
-        effect.setParameter("Operation", "SUBTRACT")
-        effect.setParameter("ModifierSegmentID", patientVoidID)
-        effect.self().onApply()
+        patientSitk  = seg_to_sitk(patientVoidID)
+        cylinderSitk = seg_to_sitk(cylinderID)
+        elbowSitk    = seg_to_sitk(elbowID)
 
-        # Cleanup Scene
+        # Cast to binary uint8 for dilation
+        toBinary = lambda img: sitk.Cast(img > 0, sitk.sitkUInt8)
+        patientBin  = toBinary(patientSitk)
+        cylinderBin = toBinary(cylinderSitk)
+        elbowBin    = toBinary(elbowSitk)
+
+        logging.info(f"Patient nonzero: {np.sum(sitk.GetArrayViewFromImage(patientBin))}")
+        logging.info(f"Cylinder nonzero: {np.sum(sitk.GetArrayViewFromImage(cylinderBin))}")
+        logging.info(f"Elbow nonzero: {np.sum(sitk.GetArrayViewFromImage(elbowBin))}")
+
+        # --- NUMPY BOOLEAN OPERATIONS ---
+        radius_3mm = max(1, int(3.0 / spacing))
+        radius_8mm = max(1, int(8.0 / spacing))
+
+        expandedPatient = sitk.GetArrayFromImage(
+            sitk.BinaryDilate(patientBin, [radius_3mm]*3)
+        ).astype(bool)
+
+        socketBlank = sitk.GetArrayFromImage(
+            sitk.BinaryDilate(patientBin, [radius_8mm]*3)
+        ).astype(bool)
+
+        cylinderArr = sitk.GetArrayFromImage(cylinderBin).astype(bool)
+        elbowArr    = sitk.GetArrayFromImage(elbowBin).astype(bool)
+
+        # Union cylinder and elbow into socket blank, then subtract the liner void
+        socketBlank = (socketBlank | cylinderArr | elbowArr) & ~expandedPatient
+
+        logging.info(f"Final socket voxel count: {np.sum(socketBlank)}")
+        if np.sum(socketBlank) == 0:
+            slicer.util.errorDisplay("Socket is empty after boolean ops — check that all meshes are in the same coordinate space.")
+            slicer.mrmlScene.RemoveNode(segNode)
+            slicer.mrmlScene.RemoveNode(refVolumeNode)
+            return
+
+        # --- CONVERT BACK TO MESH ---
+        resultArray = socketBlank.astype(np.int16)
+        resultLabelmapNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode", "TempSocketVolume")
+        slicer.util.updateVolumeFromArray(resultLabelmapNode, resultArray)
+        resultLabelmapNode.SetSpacing(spacing, spacing, spacing)
+        resultLabelmapNode.SetOrigin(origin)
+
+        resultSegNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode", "FinalSocket")
+        resultSegNode.CreateDefaultDisplayNodes()
+        slicer.modules.segmentations.logic().ImportLabelmapToSegmentationNode(resultLabelmapNode, resultSegNode)
+
+        outSegmentation = resultSegNode.GetSegmentation()
+        outSegID = outSegmentation.GetNthSegmentID(0)
+        outSegmentation.GetSegment(outSegID).SetName("Prosthetic Socket")
+
+        shNode = slicer.mrmlScene.GetSubjectHierarchyNode()
+        exportFolderId = shNode.CreateFolderItem(shNode.GetSceneItemID(), "Final_Prosthetic")
+        exportIDs = vtk.vtkStringArray()
+        exportIDs.InsertNextValue(outSegID)
+        slicer.modules.segmentations.logic().ExportSegmentsToModels(resultSegNode, exportIDs, exportFolderId)
+
+        # --- CLEANUP ---
+        slicer.mrmlScene.RemoveNode(segNode)
+        slicer.mrmlScene.RemoveNode(refVolumeNode)
+        slicer.mrmlScene.RemoveNode(resultLabelmapNode)
+        slicer.mrmlScene.RemoveNode(resultSegNode)
+
         patientModelNode.GetDisplayNode().SetVisibility(False)
         cylinderModelNode.GetDisplayNode().SetVisibility(False)
         elbowModelNode.GetDisplayNode().SetVisibility(False)
-        slicer.mrmlScene.RemoveNode(segmentEditorNode)
-        
-        # Export final segmentation to a 3D Model Node
-        slicer.modules.segmentations.logic().ExportAllSegmentsToModels(segNode, slicer.mrmlScene.GetSubjectHierarchyNode().GetSceneItemID())
-        
-        logging.info("Socket generation complete.")
+
+        logging.info("Hollowing complete.")
         slicer.util.resetThreeDViews()
+
 #
 # PopScannerTest
 #
