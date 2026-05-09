@@ -160,21 +160,30 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.onSceneEndClose)
 
+        # 1. Initialize the SpinBox
         self.distanceSpinBox = qt.QDoubleSpinBox()
         self.distanceSpinBox.setRange(0.0, 500.0)
         self.distanceSpinBox.setValue(150.0) # Default extension distance
         self.distanceSpinBox.setSuffix(" mm")
         self.distanceSpinBox.setToolTip("Distance from the bottom of the stump to the elbow joint.")
         
+        # 2. Create the layout for the distance input
         distanceLayout = qt.QHBoxLayout()
         distanceLayout.addWidget(qt.QLabel("Extension Distance:"))
         distanceLayout.addWidget(self.distanceSpinBox)
         
-        # Insert right above the Apply button
-        applyButtonLayout = self.ui.applyButton.parent().layout()
-        applyButtonLayout.insertLayout(applyButtonLayout.count() - 1, distanceLayout)
+        # 3. Find the parent layout containing the buttons
+        # We look inside the uiWidget's layout (usually a QVBoxLayout)
+        containerLayout = uiWidget.layout()
+        
+        # 4. Find the index of the exportSTLButton
+        # We insert the layout at this index, which pushes the button down
+        exportButtonIndex = containerLayout.indexOf(self.ui.exportSTLButton)
+        containerLayout.insertLayout(exportButtonIndex, distanceLayout)
 
+        # Connections
         self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
+        self.ui.exportSTLButton.connect("clicked(bool)", self.onExportButton)
         self.ui.inputFileBrowseButton.connect("clicked(bool)", self.onBrowseInputFile)
         
         self.ui.armMarkupsWidget.connect("markupsNodeChanged()", self._onArmMarkupsNodeChanged)
@@ -182,6 +191,9 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         self.initializeParameterNode()
         self.loadProstheticModel()
+        
+        # Setup slicelet UI - hide unnecessary elements
+        self.setupSliceletUI()
 
     def loadProstheticModel(self) -> None:
         """Load the prosthetic elbow model at startup."""
@@ -226,6 +238,32 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             logging.error(f"Exception loading prosthetic model: {str(e)}", exc_info=True)
             slicer.util.errorDisplay(f"Error loading prosthetic model:\n{str(e)}")
             return False
+
+    def setupSliceletUI(self) -> None:
+        """Setup the slicelet UI by hiding unnecessary elements for a streamlined workflow."""
+        # Hide main Slicer UI elements to create a focused slicelet experience
+        slicer.util.setMenuBarsVisible(False)
+        slicer.util.setToolbarsVisible(False)
+        slicer.util.setStatusBarVisible(False)
+        slicer.util.setModulePanelTitleVisible(False)
+        slicer.util.setModuleHelpSectionVisible(False)
+        
+        # Hide the data probe (bottom left corner info)
+        slicer.util.setDataProbeVisible(False)
+        
+        # Hide the logo and version info in the bottom right
+        slicer.util.setApplicationLogoVisible(False)
+        
+        # Set a custom window title for the slicelet
+        slicer.app.mainWindow().setWindowTitle("PopScanner - Prosthetic Socket Generator")
+        
+        # Set window to a reasonable size for the workflow
+        slicer.app.mainWindow().resize(1200, 800)
+        
+        # Ensure we're in 3D view layout
+        layoutManager = slicer.app.layoutManager()
+        if layoutManager:
+            layoutManager.setLayout(slicer.vtkMRMLLayoutNode.SlicerLayoutOneUp3DView)
 
     def cleanup(self) -> None:
         """Called when the application closes and the module widget is destroyed."""
@@ -305,6 +343,10 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         else:
             self.ui.applyButton.text = _("Place 3 points on Patient Arm")
             self.ui.applyButton.enabled = False
+        
+        # Enable Export button if prosthetic socket has been generated
+        socketNode = slicer.util.getNode("Prosthetic Socket")
+        self.ui.exportSTLButton.enabled = socketNode is not None
 
     def onApplyButton(self) -> None:
         slicer.app.layoutManager().setLayout(slicer.vtkMRMLLayoutNode.SlicerLayoutOneUp3DView)
@@ -363,6 +405,29 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             except Exception as e:
                 logging.error(f"Error loading model: {str(e)}")
                 slicer.util.errorDisplay(f"Error loading model: {str(e)}")
+
+    def onExportButton(self) -> None:
+        """Open directory dialog and export the prosthetic socket as STL."""
+        socketNode = slicer.util.getNode("Prosthetic Socket")
+        if not socketNode:
+            slicer.util.errorDisplay("No prosthetic socket found. Please generate one first.")
+            return
+        
+        # Open directory selection dialog
+        outputDir = qt.QFileDialog.getExistingDirectory(
+            None,
+            "Select Directory to Save Prosthetic Socket",
+            ""
+        )
+        
+        if outputDir:
+            try:
+                # Call the logic to save the STL file
+                self.logic.exportSocketToSTL(socketNode, outputDir)
+                slicer.util.infoDisplay(f"Prosthetic socket exported successfully to:\n{outputDir}")
+            except Exception as e:
+                logging.error(f"Error exporting socket: {str(e)}")
+                slicer.util.errorDisplay(f"Error exporting socket:\n{str(e)}")
 
 #
 # PopScannerLogic
@@ -633,6 +698,25 @@ class PopScannerLogic(ScriptedLoadableModuleLogic):
 
         logging.info("Hollowing complete.")
         slicer.util.resetThreeDViews()
+
+    def exportSocketToSTL(self, socketNode, outputDir) -> None:
+        """Export the prosthetic socket model to an STL file."""
+        import os
+        from datetime import datetime
+        
+        # Generate filename with timestamp to avoid overwrites
+        timestamp = datetime.now().strftime("%Y-%m-%d")
+        filename = f"above_elbow_prosthetic_{timestamp}.stl"
+        filepath = os.path.join(outputDir, filename)
+        
+        logging.info(f"Exporting prosthetic socket to: {filepath}")
+        
+        # Save the model node as STL
+        success = slicer.util.saveNode(socketNode, filepath)
+        if success:
+            logging.info(f"Successfully saved prosthetic socket to {filepath}")
+        else:
+            raise RuntimeError(f"Failed to save prosthetic socket to {filepath}")
 
 #
 # PopScannerTest
