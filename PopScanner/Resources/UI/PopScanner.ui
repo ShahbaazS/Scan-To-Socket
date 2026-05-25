@@ -6,8 +6,13 @@
    <rect>
     <x>0</x>
     <y>0</y>
+<<<<<<< HEAD
     <width>592</width>
     <height>544</height>
+=======
+    <width>450</width>
+    <height>420</height>
+>>>>>>> be2f9fafed0b2c252e3666c752871eafd3b84eb0
    </rect>
   </property>
   <property name="sizePolicy">
@@ -114,13 +119,25 @@ p, li { white-space: pre-wrap; }
       <bool>false</bool>
      </property>
      <property name="toolTip">
-      <string>Apply landmark registration to align models.</string>
+      <string>Generate the final prosthetic socket model.</string>
      </property>
      <property name="text">
-      <string>Apply Landmark Registration</string>
+      <string>Generate Prosthetic Socket</string>
      </property>
     </widget>
    </item>
+
+   <item>
+    <widget class="QPushButton" name="exportSTLButton">
+     <property name="enabled">
+      <bool>true</bool>
+     </property>
+     <property name="text">
+      <string>Export as STL</string>
+     </property>
+    </widget>
+   </item>
+   
    <item>
     <spacer name="verticalSpacer">
      <property name="orientation">
