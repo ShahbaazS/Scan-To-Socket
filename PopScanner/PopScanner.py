@@ -169,7 +169,7 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         distanceLayout = qt.QHBoxLayout()
         distanceLayout.addWidget(qt.QLabel("Extension Distance:"))
         distanceLayout.addWidget(self.distanceSpinBox)
-        
+       
         # Insert right above the Apply button
         applyButtonLayout = self.ui.applyButton.parent().layout()
         applyButtonLayout.insertLayout(applyButtonLayout.count() - 1, distanceLayout)
