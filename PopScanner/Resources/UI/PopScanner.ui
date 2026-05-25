@@ -6,8 +6,13 @@
    <rect>
     <x>0</x>
     <y>0</y>
+<<<<<<< HEAD
+    <width>592</width>
+    <height>544</height>
+=======
     <width>450</width>
     <height>420</height>
+>>>>>>> be2f9fafed0b2c252e3666c752871eafd3b84eb0
    </rect>
   </property>
   <property name="sizePolicy">
@@ -187,6 +192,29 @@ p, li { white-space: pre-wrap; }
      </property>
     </spacer>
    </item>
+   <item>
+    <widget class="QLabel" name="label_2">
+     <property name="text">
+      <string>Extention Distance </string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="ctkSliderWidget" name="extensionDistanceSlider">
+     <property name="decimals">
+      <number>0</number>
+     </property>
+     <property name="maximum">
+      <double>300.000000000000000</double>
+     </property>
+     <property name="value">
+      <double>150.000000000000000</double>
+     </property>
+     <property name="suffix">
+      <string>mm</string>
+     </property>
+    </widget>
+   </item>
   </layout>
  </widget>
  <customwidgets>
@@ -195,6 +223,11 @@ p, li { white-space: pre-wrap; }
    <extends>QWidget</extends>
    <header>ctkCollapsibleButton.h</header>
    <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ctkSliderWidget</class>
+   <extends>QWidget</extends>
+   <header>ctkSliderWidget.h</header>
   </customwidget>
   <customwidget>
    <class>qMRMLWidget</class>
