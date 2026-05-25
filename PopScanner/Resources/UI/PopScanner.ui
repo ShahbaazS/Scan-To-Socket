@@ -109,6 +109,47 @@ p, li { white-space: pre-wrap; }
     </widget>
    </item>
    <item>
+    <widget class="ctkCollapsibleButton" name="socketOptionsCollapsibleButton">
+     <property name="text">
+      <string>Socket Options</string>
+     </property>
+     <layout class="QFormLayout" name="formLayout_socketOptions">
+      <item row="0" column="0">
+       <widget class="QLabel" name="wallThicknessLabel">
+        <property name="text">
+         <string>Wall Thickness:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="ctkSliderWidget" name="wallThicknessSlider">
+        <property name="toolTip">
+         <string>Socket shell thickness in mm. 3–5 mm is typical for FDM-printed sockets. Inner clearance of 1.5 mm is added automatically for fit.</string>
+        </property>
+        <property name="minimum">
+         <double>2</double>
+        </property>
+        <property name="maximum">
+         <double>12</double>
+        </property>
+        <property name="value">
+         <double>4</double>
+        </property>
+        <property name="singleStep">
+         <double>0.5</double>
+        </property>
+        <property name="suffix">
+         <string> mm</string>
+        </property>
+        <property name="decimals">
+         <double>1</double>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QPushButton" name="applyButton">
      <property name="enabled">
       <bool>false</bool>
