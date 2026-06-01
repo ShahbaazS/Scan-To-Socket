@@ -177,17 +177,28 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         
         # 2. Create the layout for the distance input
         distanceLayout = qt.QHBoxLayout()
-        distanceLayout.addWidget(qt.QLabel("Extension Distance:"))
+        distanceLayout.addWidget(qt.QLabel("Shoulder to Elbow Distance:"))
         distanceLayout.addWidget(self.distanceSpinBox)
         
         # 3. Find the parent layout containing the buttons
         # We look inside the uiWidget's layout (usually a QVBoxLayout)
         containerLayout = uiWidget.layout()
         
-        # 4. Find the index of the exportSTLButton
-        # We insert the layout at this index, which pushes the button down
-        exportButtonIndex = containerLayout.indexOf(self.ui.exportSTLButton)
-        containerLayout.insertLayout(exportButtonIndex, distanceLayout)
+        # Insert the distance control under Wall Thickness and above Preview Alignment
+        try:
+            wallThicknessIndex = containerLayout.indexOf(self.ui.wallThicknessWidget)
+        except Exception:
+            wallThicknessIndex = -1
+        if wallThicknessIndex != -1:
+            containerLayout.insertLayout(wallThicknessIndex + 1, distanceLayout)
+        else:
+            # Fallback: insert before the Apply button (Preview is inserted above Apply)
+            applyIndex = containerLayout.indexOf(self.ui.applyButton)
+            if applyIndex != -1:
+                containerLayout.insertLayout(applyIndex, distanceLayout)
+            else:
+                # Last resort: append to the end
+                containerLayout.addLayout(distanceLayout)
 
         # Connections
         self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
@@ -227,9 +238,9 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         cropBtnRow.addWidget(self._cancelCropBtn)
         cropLayout.addLayout(cropBtnRow)
 
-        applyButtonIndex = containerLayout.indexOf(self.ui.applyButton)
-        # Insert crop group above the apply button
-        containerLayout.insertWidget(applyButtonIndex, cropGroupBox)
+        # Insert crop group below the Extension Distance control and above the Export button
+        exportButtonIndex = containerLayout.indexOf(self.ui.exportSTLButton)
+        containerLayout.insertWidget(exportButtonIndex, cropGroupBox)
 
         self._startCropBtn.connect("clicked(bool)", self.onStartCrop)
         self._doneCropBtn.connect("clicked(bool)", self.onDoneCrop)
