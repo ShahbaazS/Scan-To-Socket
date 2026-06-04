@@ -168,37 +168,10 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.onSceneEndClose)
 
-        # 1. Initialize the SpinBox
-        self.distanceSpinBox = qt.QDoubleSpinBox()
-        self.distanceSpinBox.setRange(0.0, 500.0)
-        self.distanceSpinBox.setValue(50.0) # Default extension distance
-        self.distanceSpinBox.setSuffix(" mm")
-        self.distanceSpinBox.setToolTip("Distance from the bottom of the stump to the elbow joint.")
-        
-        # 2. Create the layout for the distance input
-        distanceLayout = qt.QHBoxLayout()
-        distanceLayout.addWidget(qt.QLabel("Shoulder to Elbow Distance:"))
-        distanceLayout.addWidget(self.distanceSpinBox)
-        
-        # 3. Find the parent layout containing the buttons
-        # We look inside the uiWidget's layout (usually a QVBoxLayout)
+        # Use the UI slider for shoulder-to-elbow distance
+        self.ui.shoulderDistanceSlider.setToolTip("Distance from the shoulder to the elbow target point in mm.")
+
         containerLayout = uiWidget.layout()
-        
-        # Insert the distance control under Wall Thickness and above Preview Alignment
-        try:
-            wallThicknessIndex = containerLayout.indexOf(self.ui.wallThicknessWidget)
-        except Exception:
-            wallThicknessIndex = -1
-        if wallThicknessIndex != -1:
-            containerLayout.insertLayout(wallThicknessIndex + 1, distanceLayout)
-        else:
-            # Fallback: insert before the Apply button (Preview is inserted above Apply)
-            applyIndex = containerLayout.indexOf(self.ui.applyButton)
-            if applyIndex != -1:
-                containerLayout.insertLayout(applyIndex, distanceLayout)
-            else:
-                # Last resort: append to the end
-                containerLayout.addLayout(distanceLayout)
 
         # Connections
         self.ui.applyButton.connect("clicked(bool)", self.onApplyButton)
@@ -242,6 +215,24 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         exportButtonIndex = containerLayout.indexOf(self.ui.exportSTLButton)
         containerLayout.insertWidget(exportButtonIndex, cropGroupBox)
 
+        # Live elbow width counter shown below the shoulder-to-elbow distance control
+        self._elbowWidthLabel = qt.QLabel("Elbow Width: -- mm")
+        self._elbowWidthLabel.setAlignment(qt.Qt.AlignCenter)
+        self._elbowWidthLabel.setStyleSheet("margin-bottom: 4px;")
+        distanceIndex = containerLayout.indexOf(self.ui.shoulderDistanceWidget)
+        if distanceIndex != -1:
+            containerLayout.insertWidget(distanceIndex + 1, self._elbowWidthLabel)
+        else:
+            paddingIndex = containerLayout.indexOf(self.ui.paddingThicknessWidget)
+            if paddingIndex != -1:
+                containerLayout.insertWidget(paddingIndex + 1, self._elbowWidthLabel)
+            else:
+                exportButtonIndex = containerLayout.indexOf(self.ui.exportSTLButton)
+                if exportButtonIndex != -1:
+                    containerLayout.insertWidget(exportButtonIndex, self._elbowWidthLabel)
+                else:
+                    containerLayout.addWidget(self._elbowWidthLabel)
+
         self._startCropBtn.connect("clicked(bool)", self.onStartCrop)
         self._doneCropBtn.connect("clicked(bool)", self.onDoneCrop)
         self._cancelCropBtn.connect("clicked(bool)", self.onCancelCrop)
@@ -267,7 +258,7 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         containerLayout.insertWidget(applyButtonIndex, previewGroupBox)
 
         self._previewBtn.connect("clicked(bool)", self.onPreviewElbow)
-        self.distanceSpinBox.connect("valueChanged(double)", self._onDistanceChanged)
+        self.ui.shoulderDistanceSlider.connect("valueChanged(double)", self._onDistanceChanged)
 
         self.initializeParameterNode()
         self.loadProstheticModel()
@@ -306,6 +297,7 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 if displayNode:
                     displayNode.SetColor(0, 1, 0)  # Green: R=0, G=1, B=0
                 logging.info(f"Prosthetic model loaded successfully: {modelNode.GetName()}")
+                self._updateElbowWidthLabel()
                 return True
             else:
                 logging.error("Failed to load the prosthetic model (elbow.stl) - loadModel returned None")
@@ -449,7 +441,7 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self._previewActive = True
         self._isUpdating = False # Anti-infinite-loop flag
 
-        dist = self.distanceSpinBox.value
+        dist = self.ui.shoulderDistanceSlider.value
         target_pos, p1, z_axis, y_axis, x_axis, scale, stump_radius = self.logic.get_alignment_params(armNode, dist)
 
         # 1. Setup Master Transform & Gizmos
@@ -520,9 +512,9 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             # Update distance UI silently
             p0 = np.zeros(3); lineNode.GetNthControlPointPosition(0, p0)
             dist = np.linalg.norm(np.array(p1) - p0)
-            self.distanceSpinBox.blockSignals(True)
-            self.distanceSpinBox.setValue(dist)
-            self.distanceSpinBox.blockSignals(False)
+            self.ui.shoulderDistanceSlider.blockSignals(True)
+            self.ui.shoulderDistanceSlider.setValue(dist)
+            self.ui.shoulderDistanceSlider.blockSignals(False)
 
             self._redrawPreviewCylinder()
         finally:
@@ -550,16 +542,16 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
             p0 = np.zeros(3); lineNode.GetNthControlPointPosition(0, p0)
             dist = np.linalg.norm(p1 - p0)
-            self.distanceSpinBox.blockSignals(True)
-            self.distanceSpinBox.setValue(dist)
-            self.distanceSpinBox.blockSignals(False)
+            self.ui.shoulderDistanceSlider.blockSignals(True)
+            self.ui.shoulderDistanceSlider.setValue(dist)
+            self.ui.shoulderDistanceSlider.blockSignals(False)
 
             self._redrawPreviewCylinder()
         finally:
             self._isUpdating = False
 
     def _onDistanceChanged(self, val) -> None:
-        """Fires if the user types a manual distance in the SpinBox."""
+        """Fires if the user changes the shoulder-to-elbow distance slider."""
         if not self._previewActive or getattr(self, "_isUpdating", False): return
         
         lineNode = slicer.mrmlScene.GetFirstNodeByName("TrajectoryLine")
@@ -637,6 +629,100 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         tf.SetTransform(cylTransform)
         tf.Update()
         cylNode.SetAndObservePolyData(tf.GetOutput())
+
+        self._updateElbowWidthLabel()
+        self._updateElbowWidthLine()
+
+    def _getCurrentElbowWidthMm(self) -> float | None:
+        """Compute the current elbow width in mm from the prosthetic model and its transform."""
+        prostheticModel = slicer.util.getNode("Prosthetic Elbow")
+        if not prostheticModel:
+            return None
+
+        polyData = prostheticModel.GetPolyData()
+        if not polyData:
+            return None
+
+        bounds = [0.0] * 6
+        polyData.GetBounds(bounds)
+        local_width = bounds[1] - bounds[0]
+        if local_width <= 0.0:
+            return None
+
+        scale = 1.0
+        transformNode = slicer.mrmlScene.GetFirstNodeByName("MasterElbowTransform")
+        if transformNode:
+            matrix = vtk.vtkMatrix4x4()
+            transformNode.GetMatrixTransformToParent(matrix)
+            scale = np.linalg.norm([
+                matrix.GetElement(0, 0),
+                matrix.GetElement(1, 0),
+                matrix.GetElement(2, 0),
+            ])
+            if scale <= 0.0:
+                scale = 1.0
+
+        return local_width * scale
+
+    def _updateElbowWidthLabel(self) -> None:
+        width_mm = self._getCurrentElbowWidthMm()
+        if width_mm is None:
+            self._elbowWidthLabel.setText("Elbow Width: -- mm")
+        else:
+            self._elbowWidthLabel.setText(f"Elbow Width: {width_mm:.1f} mm")
+
+    def _updateElbowWidthLine(self) -> None:
+        prostheticModel = slicer.util.getNode("Prosthetic Elbow")
+        transformNode = slicer.mrmlScene.GetFirstNodeByName("MasterElbowTransform")
+        if not prostheticModel or not transformNode:
+            return
+
+        polyData = prostheticModel.GetPolyData()
+        if not polyData:
+            return
+
+        bounds = [0.0] * 6
+        polyData.GetBounds(bounds)
+        x_min, x_max = bounds[0], bounds[1]
+        y_center = (bounds[2] + bounds[3]) / 2.0
+        z_center = (bounds[4] + bounds[5]) / 2.0
+
+        p0_local = [x_min, y_center, z_center]
+        p1_local = [x_max, y_center, z_center]
+
+        matrix = vtk.vtkMatrix4x4()
+        transformNode.GetMatrixTransformToParent(matrix)
+
+        def world_point(local_pt):
+            x, y, z = local_pt
+            return [
+                matrix.GetElement(0, 0) * x + matrix.GetElement(0, 1) * y + matrix.GetElement(0, 2) * z + matrix.GetElement(0, 3),
+                matrix.GetElement(1, 0) * x + matrix.GetElement(1, 1) * y + matrix.GetElement(1, 2) * z + matrix.GetElement(1, 3),
+                matrix.GetElement(2, 0) * x + matrix.GetElement(2, 1) * y + matrix.GetElement(2, 2) * z + matrix.GetElement(2, 3),
+            ]
+
+        p0_world = world_point(p0_local)
+        p1_world = world_point(p1_local)
+
+        lineSource = vtk.vtkLineSource()
+        lineSource.SetPoint1(p0_world)
+        lineSource.SetPoint2(p1_world)
+        lineSource.Update()
+
+        lineNode = slicer.mrmlScene.GetFirstNodeByName("ElbowWidthLine")
+        if not lineNode:
+            lineNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelNode", "ElbowWidthLine")
+            lineNode.CreateDefaultDisplayNodes()
+            displayNode = lineNode.GetDisplayNode()
+            if displayNode:
+                displayNode.SetColor(0.0, 0.0, 0.0)
+                displayNode.SetOpacity(1.0)
+                try:
+                    displayNode.SetLineWidth(3)
+                except Exception:
+                    pass
+
+        lineNode.SetAndObservePolyData(lineSource.GetOutput())
 
     # ------------------------------------------------------------------
     # Crop mode
@@ -923,8 +1009,9 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         
         offset_dist = np.linalg.norm(target_pos - p0)
         wall_thickness = self.ui.wallThicknessSlider.value
+        padding_thickness = self.ui.paddingThicknessSlider.value
         
-        self.logic.generate_prosthetic_socket(patientModel, elbowModelNode, p0, target_pos, offset_dist, stump_radius, wall_thickness)
+        self.logic.generate_prosthetic_socket(patientModel, elbowModelNode, p0, target_pos, offset_dist, stump_radius, wall_thickness, padding_thickness)
 
         self._checkCanApply()
 
@@ -1143,7 +1230,7 @@ class PopScannerLogic(ScriptedLoadableModuleLogic):
             
         self.generate_prosthetic_socket(patientModelNode, elbowModelNode, p1, target_pos, offset_distance, stump_radius, wall_thickness)
 
-    def generate_prosthetic_socket(self, patientModelNode, elbowModelNode, p1_stump_center, elbow_target_pos, offset_distance, stump_radius, wall_thickness=4.0):
+    def generate_prosthetic_socket(self, patientModelNode, elbowModelNode, p1_stump_center, elbow_target_pos, offset_distance, stump_radius, wall_thickness=4.0, padding_thickness=0.0):
         import SimpleITK as sitk
         import sitkUtils
 
@@ -1233,9 +1320,10 @@ class PopScannerLogic(ScriptedLoadableModuleLogic):
         # Hollow boolean
         clearance_vox = max(1, round(1.5 / spacing))
         wall_vox = max(1, round(wall_thickness / spacing))
+        padding_vox = max(0, round(padding_thickness / spacing))
 
         inner_bore = sitk.BinaryDilate(patientBin, [clearance_vox] * 3)
-        outer_shell = sitk.BinaryDilate(patientBin, [clearance_vox + wall_vox] * 3)
+        outer_shell = sitk.BinaryDilate(patientBin, [clearance_vox + wall_vox + padding_vox] * 3)
 
         inner_arr = sitk.GetArrayFromImage(inner_bore).astype(bool)
         outer_arr = sitk.GetArrayFromImage(outer_shell).astype(bool)

@@ -149,6 +149,82 @@ p, li { white-space: pre-wrap; }
     </widget>
    </item>
    <item>
+    <widget class="QWidget" name="paddingThicknessWidget">
+     <layout class="QFormLayout" name="formLayout_paddingThickness">
+      <item row="0" column="0">
+       <widget class="QLabel" name="paddingThicknessLabel">
+        <property name="text">
+         <string>Padding Thickness:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="ctkSliderWidget" name="paddingThicknessSlider">
+        <property name="toolTip">
+         <string>Padding thickness in mm. Scales the prosthetic outward to accommodate padding material inside the socket.</string>
+        </property>
+        <property name="minimum">
+         <double>0</double>
+        </property>
+        <property name="maximum">
+         <double>10</double>
+        </property>
+        <property name="value">
+         <double>0</double>
+        </property>
+        <property name="singleStep">
+         <double>0.5</double>
+        </property>
+        <property name="suffix">
+         <string> mm</string>
+        </property>
+        <property name="decimals">
+         <double>1</double>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QWidget" name="shoulderDistanceWidget">
+     <layout class="QFormLayout" name="formLayout_shoulderDistance">
+      <item row="0" column="0">
+       <widget class="QLabel" name="shoulderDistanceLabel">
+        <property name="text">
+         <string>Shoulder to Elbow Distance:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="ctkSliderWidget" name="shoulderDistanceSlider">
+        <property name="toolTip">
+         <string>Distance from the shoulder to the elbow target point in mm.</string>
+        </property>
+        <property name="minimum">
+         <double>0</double>
+        </property>
+        <property name="maximum">
+         <double>500</double>
+        </property>
+        <property name="value">
+         <double>50</double>
+        </property>
+        <property name="singleStep">
+         <double>1</double>
+        </property>
+        <property name="suffix">
+         <string> mm</string>
+        </property>
+        <property name="decimals">
+         <double>1</double>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QPushButton" name="applyButton">
      <property name="enabled">
       <bool>false</bool>
