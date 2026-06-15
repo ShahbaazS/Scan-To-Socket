@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>PopScanner</class>
- <widget class="qMRMLWidget" name="PopScanner">
+ <class>ScanToSocket</class>
+ <widget class="qMRMLWidget" name="ScanToSocket">
   <property name="geometry">
    <rect>
     <x>0</x>
@@ -297,7 +297,7 @@ p, li { white-space: pre-wrap; }
  <resources/>
  <connections>
   <connection>
-   <sender>PopScanner</sender>
+   <sender>ScanToSocket</sender>
    <signal>mrmlSceneChanged(vtkMRMLScene*)</signal>
    <receiver>armMarkupsWidget</receiver>
    <slot>setMRMLScene(vtkMRMLScene*)</slot>

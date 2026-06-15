@@ -23,18 +23,18 @@ from slicer import vtkMRMLScalarVolumeNode
 
 
 #
-# PopScanner
+# ScanToSocket
 #
 
 
-class PopScanner(ScriptedLoadableModule):
+class ScanToSocket(ScriptedLoadableModule):
     """Uses ScriptedLoadableModule base class, available at:
     https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
     """
 
     def __init__(self, parent):
         ScriptedLoadableModule.__init__(self, parent)
-        self.parent.title = _("PopScanner")
+        self.parent.title = _("ScanToSocket")
         self.parent.categories = [translate("qSlicerAbstractCoreModule", "Prosthetics")]
         self.parent.dependencies = []
         self.parent.contributors = ["Emese Elkind, Shahbaaz Siddiqui"]
@@ -72,46 +72,46 @@ def registerSampleData():
     # To ensure that the source code repository remains small (can be downloaded and installed quickly)
     # it is recommended to store data sets that are larger than a few MB in a Github release.
 
-    # PopScanner1
+    # ScanToSocket1
     SampleData.SampleDataLogic.registerCustomSampleDataSource(
         # Category and sample name displayed in Sample Data module
-        category="PopScanner",
-        sampleName="PopScanner1",
+        category="ScanToSocket",
+        sampleName="ScanToSocket1",
         # Thumbnail should have size of approximately 260x280 pixels and stored in Resources/Icons folder.
         # It can be created by Screen Capture module, "Capture all views" option enabled, "Number of images" set to "Single".
-        thumbnailFileName=os.path.join(iconsPath, "PopScanner1.png"),
+        thumbnailFileName=os.path.join(iconsPath, "ScanToSocket1.png"),
         # Download URL and target file name
         uris="https://github.com/Slicer/SlicerTestingData/releases/download/SHA256/998cb522173839c78657f4bc0ea907cea09fd04e44601f17c82ea27927937b95",
-        fileNames="PopScanner1.nrrd",
+        fileNames="ScanToSocket1.nrrd",
         # Checksum to ensure file integrity. Can be computed by this command:
         #  import hashlib; print(hashlib.sha256(open(filename, "rb").read()).hexdigest())
         checksums="SHA256:998cb522173839c78657f4bc0ea907cea09fd04e44601f17c82ea27927937b95",
         # This node name will be used when the data set is loaded
-        nodeNames="PopScanner1",
+        nodeNames="ScanToSocket1",
     )
 
-    # PopScanner2
+    # ScanToSocket2
     SampleData.SampleDataLogic.registerCustomSampleDataSource(
         # Category and sample name displayed in Sample Data module
-        category="PopScanner",
-        sampleName="PopScanner2",
-        thumbnailFileName=os.path.join(iconsPath, "PopScanner2.png"),
+        category="ScanToSocket",
+        sampleName="ScanToSocket2",
+        thumbnailFileName=os.path.join(iconsPath, "ScanToSocket2.png"),
         # Download URL and target file name
         uris="https://github.com/Slicer/SlicerTestingData/releases/download/SHA256/1a64f3f422eb3d1c9b093d1a18da354b13bcf307907c66317e2463ee530b7a97",
-        fileNames="PopScanner2.nrrd",
+        fileNames="ScanToSocket2.nrrd",
         checksums="SHA256:1a64f3f422eb3d1c9b093d1a18da354b13bcf307907c66317e2463ee530b7a97",
         # This node name will be used when the data set is loaded
-        nodeNames="PopScanner2",
+        nodeNames="ScanToSocket2",
     )
 
 
 #
-# PopScannerParameterNode
+# ScanToSocketParameterNode
 #
 
 
 @parameterNodeWrapper
-class PopScannerParameterNode:
+class ScanToSocketParameterNode:
     """
     The parameters needed by module.
 
@@ -129,11 +129,11 @@ class PopScannerParameterNode:
 
 
 #
-# PopScannerWidget
+# ScanToSocketWidget
 #
 
 
-class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
+class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
     """Uses ScriptedLoadableModuleWidget base class, available at:
     https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
     """
@@ -158,12 +158,12 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         """Called when the user opens the module the first time and the widget is initialized."""
         ScriptedLoadableModuleWidget.setup(self)
 
-        uiWidget = slicer.util.loadUI(self.resourcePath("UI/PopScanner.ui"))
+        uiWidget = slicer.util.loadUI(self.resourcePath("UI/ScanToSocket.ui"))
         self.layout.addWidget(uiWidget)
         self.ui = slicer.util.childWidgetVariables(uiWidget)
         uiWidget.setMRMLScene(slicer.mrmlScene)
 
-        self.logic = PopScannerLogic()
+        self.logic = ScanToSocketLogic()
         
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.onSceneEndClose)
@@ -324,7 +324,7 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         slicer.util.setApplicationLogoVisible(False)
         
         # Set a custom window title for the slicelet
-        slicer.app.mainWindow().setWindowTitle("PopScanner - Prosthetic Socket Generator")
+        slicer.app.mainWindow().setWindowTitle("ScanToSocket - Prosthetic Socket Generator")
         
         # Set window to a reasonable size for the workflow
         slicer.app.mainWindow().resize(1200, 800)
@@ -368,7 +368,7 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         self.setParameterNode(self.logic.getParameterNode())
 
-    def setParameterNode(self, inputParameterNode: PopScannerParameterNode | None) -> None:
+    def setParameterNode(self, inputParameterNode: ScanToSocketParameterNode | None) -> None:
         """
         Set and observe parameter node.
         Observation is needed because when the parameter node is changed then the GUI must be updated immediately.
@@ -1084,11 +1084,11 @@ class PopScannerWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 slicer.util.errorDisplay(f"Error exporting socket:\n{str(e)}")
 
 #
-# PopScannerLogic
+# ScanToSocketLogic
 #
 
 
-class PopScannerLogic(ScriptedLoadableModuleLogic):
+class ScanToSocketLogic(ScriptedLoadableModuleLogic):
     """This class should implement all the actual
     computation done by your module.  The interface
     should be such that other python code can import
@@ -1103,7 +1103,7 @@ class PopScannerLogic(ScriptedLoadableModuleLogic):
         ScriptedLoadableModuleLogic.__init__(self)
 
     def getParameterNode(self):
-        return PopScannerParameterNode(super().getParameterNode())
+        return ScanToSocketParameterNode(super().getParameterNode())
 
     def removeDisconnectedComponents(self, segNode, seedRAS=None) -> None:
         """Keep only the connected component containing seedRAS (or the largest if no seed).
@@ -1454,11 +1454,11 @@ class PopScannerLogic(ScriptedLoadableModuleLogic):
             raise RuntimeError(f"Failed to save prosthetic socket to {filepath}")
 
 #
-# PopScannerTest
+# ScanToSocketTest
 #
 
 
-class PopScannerTest(ScriptedLoadableModuleTest):
+class ScanToSocketTest(ScriptedLoadableModuleTest):
     """
     This is the test case for your scripted module.
     Uses ScriptedLoadableModuleTest base class, available at:
@@ -1472,9 +1472,9 @@ class PopScannerTest(ScriptedLoadableModuleTest):
     def runTest(self):
         """Run as few or as many tests as needed here."""
         self.setUp()
-        self.test_PopScanner1()
+        self.test_ScanToSocket1()
 
-    def test_PopScanner1(self):
+    def test_ScanToSocket1(self):
         """Ideally you should have several levels of tests.  At the lowest level
         tests should exercise the functionality of the logic with different inputs
         (both valid and invalid).  At higher levels your tests should emulate the
@@ -1494,7 +1494,7 @@ class PopScannerTest(ScriptedLoadableModuleTest):
         import tempfile
 
         # registerSampleData()
-        # inputVolume = SampleData.downloadSample("PopScanner1")
+        # inputVolume = SampleData.downloadSample("ScanToSocket1")
         # self.delayDisplay("Loaded test data set")
 
         # # inputScalarRange = inputVolume.GetImageData().GetScalarRange()
@@ -1513,7 +1513,7 @@ class PopScannerTest(ScriptedLoadableModuleTest):
 
         # # Test the module logic
 
-        # logic = PopScannerLogic()
+        # logic = ScanToSocketLogic()
 
         # # Test algorithm with non-inverted threshold
         # logic.process(testFilePath, outputVolume, threshold, True)
