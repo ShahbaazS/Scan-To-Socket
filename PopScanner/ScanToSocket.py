@@ -4,6 +4,7 @@ from typing import Annotated
 
 import vtk
 import qt
+import ctk
 import numpy as np
 import math
 
@@ -244,7 +245,7 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         previewInstructions = qt.QLabel(
             "1. Click Preview to initialize elbow position.\n"
-            "2. Drag the Trajectory Line to adjust extension/angle.\n"
+            "2. Drag the Trajectory Line or sliders to adjust cone & radii.\n"
             "3. Use the 3D Gizmo to rotate and scale the elbow."
         )
         previewInstructions.setStyleSheet("color: #aaa; font-size: 11px;")
@@ -254,11 +255,48 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self._previewBtn.setEnabled(False)
         previewOuterLayout.addWidget(self._previewBtn)
 
+        coneSlidersLayout = qt.QFormLayout()
+        
+        self._radiusTopSlider = ctk.ctkSliderWidget()
+        self._radiusTopSlider.minimum = 10.0
+        self._radiusTopSlider.maximum = 150.0
+        self._radiusTopSlider.value = 50.0
+        self._radiusTopSlider.singleStep = 0.5
+        self._radiusTopSlider.suffix = " mm"
+        self._radiusTopSlider.decimals = 1
+        self._radiusTopSlider.setToolTip("Adjust the top radius of the bridging cone (at the stump tip).")
+        coneSlidersLayout.addRow("Top Radius (Stump):", self._radiusTopSlider)
+
+        self._radiusBottomSlider = ctk.ctkSliderWidget()
+        self._radiusBottomSlider.minimum = 10.0
+        self._radiusBottomSlider.maximum = 100.0
+        self._radiusBottomSlider.value = 27.5
+        self._radiusBottomSlider.singleStep = 0.5
+        self._radiusBottomSlider.suffix = " mm"
+        self._radiusBottomSlider.decimals = 1
+        self._radiusBottomSlider.setToolTip("Adjust the bottom radius of the bridging cone (at the elbow).")
+        coneSlidersLayout.addRow("Bottom Radius (Elbow):", self._radiusBottomSlider)
+
+        self._overlapTopSlider = ctk.ctkSliderWidget()
+        self._overlapTopSlider.minimum = 0.0
+        self._overlapTopSlider.maximum = 80.0
+        self._overlapTopSlider.value = 15.0
+        self._overlapTopSlider.singleStep = 1.0
+        self._overlapTopSlider.suffix = " mm"
+        self._overlapTopSlider.decimals = 1
+        self._overlapTopSlider.setToolTip("Adjust how much the top of the cone overlaps onto the residual limb tip.")
+        coneSlidersLayout.addRow("Top Overlap (Stump):", self._overlapTopSlider)
+
+        previewOuterLayout.addLayout(coneSlidersLayout)
+
         applyButtonIndex = containerLayout.indexOf(self.ui.applyButton)
         containerLayout.insertWidget(applyButtonIndex, previewGroupBox)
 
         self._previewBtn.connect("clicked(bool)", self.onPreviewElbow)
         self.ui.shoulderDistanceSlider.connect("valueChanged(double)", self._onDistanceChanged)
+        self._radiusTopSlider.connect("valueChanged(double)", self._onConeSliderChanged)
+        self._radiusBottomSlider.connect("valueChanged(double)", self._onConeSliderChanged)
+        self._overlapTopSlider.connect("valueChanged(double)", self._onConeSliderChanged)
 
         self.initializeParameterNode()
         self.loadProstheticModel()
@@ -400,18 +438,18 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
     def _onPointModified(self, caller, event) -> None:
         """Fires instantly when a user drags a fiducial point in the 3D view."""
         if self._previewActive:
-            self._updatePreview()
+            self.onPreviewElbow()
 
     def _checkCanApply(self, caller=None, event=None) -> None:
-        # Logic: Only enable if we have an input file AND the patient arm has exactly 3 points
-        armReady = self.ui.armMarkupsWidget.currentNode() and self.ui.armMarkupsWidget.currentNode().GetNumberOfControlPoints() == 3
+        # Logic: Only enable if we have an input file AND the patient arm has at least 1 point
+        armReady = self.ui.armMarkupsWidget.currentNode() and self.ui.armMarkupsWidget.currentNode().GetNumberOfControlPoints() >= 1
         
         if self._parameterNode and self._parameterNode.inputFilePath and armReady:
             self.ui.applyButton.text = _("Generate Prosthetic Socket")
             self.ui.applyButton.enabled = True
             self._previewBtn.setEnabled(True)
         else:
-            self.ui.applyButton.text = _("Place 3 points on Patient Arm")
+            self.ui.applyButton.text = _("Place at least 1 point on Patient Arm (Base)")
             self.ui.applyButton.enabled = False
             self._previewBtn.setEnabled(False)
         
@@ -434,15 +472,16 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         armNode = self.ui.armMarkupsWidget.currentNode()
         prostheticModel = slicer.util.getNode("Prosthetic Elbow")
         
-        if not prostheticModel or not armNode or armNode.GetNumberOfControlPoints() < 3:
-            slicer.util.errorDisplay("Make sure 'Patient Scan' is loaded and 3 points are placed.")
+        if not prostheticModel or not armNode or armNode.GetNumberOfControlPoints() < 1:
+            slicer.util.errorDisplay("Make sure 'Patient Scan' is loaded and at least 1 point is placed.")
             return
 
         self._previewActive = True
         self._isUpdating = False # Anti-infinite-loop flag
 
         dist = self.ui.shoulderDistanceSlider.value
-        target_pos, p1, z_axis, y_axis, x_axis, scale, stump_radius = self.logic.get_alignment_params(armNode, dist)
+        patientModel = slicer.mrmlScene.GetFirstNodeByName("Patient Scan")
+        target_pos, p1, z_axis, y_axis, x_axis, scale, stump_radius = self.logic.get_alignment_params(armNode, dist, patientModel)
 
         # 1. Setup Master Transform & Gizmos
         transformNode = slicer.mrmlScene.GetFirstNodeByName("MasterElbowTransform")
@@ -482,13 +521,24 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         lineNode.RemoveAllControlPoints()
         lineNode.AddControlPoint(p1)          # Point 0: Stump Center
         lineNode.AddControlPoint(target_pos)  # Point 1: Elbow Target
-        lineNode.SetNthControlPointLocked(0, True) # Lock Stump Center so user can't accidentally move it
+        lineNode.SetNthControlPointLocked(0, False) # Unlock Stump Center so user can freely adjust both line ends
 
         # 3. Bind the Bi-directional Observers
         if not hasattr(self, "_transformObserver"):
             self._transformObserver = transformNode.AddObserver(slicer.vtkMRMLTransformNode.TransformModifiedEvent, self._onTransformModified)
         if not hasattr(self, "_lineObserver"):
             self._lineObserver = lineNode.AddObserver(slicer.vtkMRMLMarkupsNode.PointModifiedEvent, self._onLineModified)
+
+        if not getattr(self, "_slidersInitialized", False):
+            if hasattr(self, "_radiusTopSlider"):
+                self._radiusTopSlider.blockSignals(True)
+                self._radiusTopSlider.value = stump_radius if stump_radius else 50.0
+                self._radiusTopSlider.blockSignals(False)
+            if hasattr(self, "_radiusBottomSlider"):
+                self._radiusBottomSlider.blockSignals(True)
+                self._radiusBottomSlider.value = scale * 27.5
+                self._radiusBottomSlider.blockSignals(False)
+            self._slidersInitialized = True
 
         self._redrawPreviewCylinder()
 
@@ -515,6 +565,12 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self.ui.shoulderDistanceSlider.blockSignals(True)
             self.ui.shoulderDistanceSlider.setValue(dist)
             self.ui.shoulderDistanceSlider.blockSignals(False)
+
+            if hasattr(self, "_radiusBottomSlider"):
+                current_scale = np.linalg.norm([matrix.GetElement(0,0), matrix.GetElement(1,0), matrix.GetElement(2,0)])
+                self._radiusBottomSlider.blockSignals(True)
+                self._radiusBottomSlider.value = current_scale * 27.5
+                self._radiusBottomSlider.blockSignals(False)
 
             self._redrawPreviewCylinder()
         finally:
@@ -569,6 +625,34 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         # Updating the line triggers the Observer, which moves the elbow & redraws the cylinder
         lineNode.SetNthControlPointPosition(1, new_p1[0], new_p1[1], new_p1[2])
 
+    def _onConeSliderChanged(self, value=None) -> None:
+        """Fires if the user changes any of the bridging cone sliders."""
+        if not hasattr(self, "_previewActive") or not self._previewActive:
+            return
+        if getattr(self, "_isUpdatingSliders", False):
+            return
+        self._isUpdatingSliders = True
+        try:
+            # Sync bottom radius slider to elbow gizmo scale!
+            transformNode = slicer.mrmlScene.GetFirstNodeByName("MasterElbowTransform")
+            if transformNode and hasattr(self, "_radiusBottomSlider"):
+                target_scale = self._radiusBottomSlider.value / 27.5
+                matrix = vtk.vtkMatrix4x4()
+                transformNode.GetMatrixTransformToParent(matrix)
+                # Keep rotation/translation, update uniform scale of columns 0, 1, 2
+                for col in range(3):
+                    vec = [matrix.GetElement(0, col), matrix.GetElement(1, col), matrix.GetElement(2, col)]
+                    norm = np.linalg.norm(vec)
+                    if norm > 1e-6:
+                        vec = [v * (target_scale / norm) for v in vec]
+                        matrix.SetElement(0, col, vec[0])
+                        matrix.SetElement(1, col, vec[1])
+                        matrix.SetElement(2, col, vec[2])
+                transformNode.SetMatrixTransformToParent(matrix)
+            self._redrawPreviewCylinder()
+        finally:
+            self._isUpdatingSliders = False
+
     def _redrawPreviewCylinder(self) -> None:
         lineNode = slicer.mrmlScene.GetFirstNodeByName("TrajectoryLine")
         transformNode = slicer.mrmlScene.GetFirstNodeByName("MasterElbowTransform")
@@ -581,7 +665,17 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         matrix = vtk.vtkMatrix4x4()
         transformNode.GetMatrixTransformToParent(matrix)
         current_scale = np.linalg.norm([matrix.GetElement(0,0), matrix.GetElement(1,0), matrix.GetElement(2,0)])
-        stump_radius = current_scale * 25.0
+        if hasattr(self, "_radiusBottomSlider"):
+            radius_elbow = self._radiusBottomSlider.value
+        else:
+            radius_elbow = current_scale * 27.5
+
+        if hasattr(self, "_radiusTopSlider"):
+            radius_top = self._radiusTopSlider.value
+        else:
+            patientModel = slicer.mrmlScene.GetFirstNodeByName("Patient Scan")
+            armNode = self.ui.armMarkupsWidget.currentNode()
+            _, _, radius_top = self.logic.compute_stump_geometry(armNode, patientModel, fallback_radius=radius_elbow * 1.25)
 
         cylNode = slicer.mrmlScene.GetFirstNodeByName("PreviewCylinder")
         if not cylNode:
@@ -591,16 +685,19 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             dispNode.SetColor(0, 1, 1) # Cyan
             dispNode.SetOpacity(0.3)   # Ghosted
 
-        overlap_top = 50.0
+        overlap_top = self._overlapTopSlider.value if hasattr(self, "_overlapTopSlider") else 15.0
         overlap_bottom = 15.0
-        total_height = np.linalg.norm(p1 - p0) + overlap_top + overlap_bottom
+        height_main = np.linalg.norm(p1 - p0) + overlap_top
+        total_height = height_main + overlap_bottom
 
-        cylinder = vtk.vtkCylinderSource()
-        cylinder.SetRadius(stump_radius * 1.1)
-        cylinder.SetHeight(total_height)
-        cylinder.SetResolution(50)
-        cylinder.SetCapping(True)
-        cylinder.Update()
+        if height_main > 1e-6:
+            slope = (radius_top - radius_elbow) / height_main
+            radius_bottom = radius_elbow - (slope * overlap_bottom)
+        else:
+            radius_bottom = radius_elbow
+        radius_bottom = max(0.1, radius_bottom)
+
+        conePolyData = self.logic.create_tapered_cylinder(radius_top, radius_bottom, total_height, 50)
 
         direction = p1 - p0
         norm = np.linalg.norm(direction)
@@ -625,7 +722,7 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         cylTransform.RotateWXYZ(angle_deg, rotation_axis.tolist())
 
         tf = vtk.vtkTransformPolyDataFilter()
-        tf.SetInputData(cylinder.GetOutput())
+        tf.SetInputData(conePolyData)
         tf.SetTransform(cylTransform)
         tf.Update()
         cylNode.SetAndObservePolyData(tf.GetOutput())
@@ -864,12 +961,13 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         if not self._cropMode or not self._cropSegNode:
             return
 
-        # Determine seed point: stump center (Point 2) if placed, else None
+        # Determine seed point: stump center if placed, else base point
         seedRAS = None
         armNode = self.ui.armMarkupsWidget.currentNode()
-        if armNode and armNode.GetNumberOfControlPoints() >= 2:
+        if armNode and armNode.GetNumberOfControlPoints() >= 1:
             p = np.zeros(3)
-            armNode.GetNthControlPointPosition(1, p)
+            idx = 1 if armNode.GetNumberOfControlPoints() >= 2 else 0
+            armNode.GetNthControlPointPosition(idx, p)
             seedRAS = p
 
         self.logic.removeDisconnectedComponents(self._cropSegNode, seedRAS)
@@ -982,7 +1080,7 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
     
     def onApplyButton(self) -> None:
         slicer.app.layoutManager().setLayout(slicer.vtkMRMLLayoutNode.SlicerLayoutOneUp3DView)
-        patientModel = slicer.util.getNode("Patient Scan")
+        patientModel = slicer.mrmlScene.GetFirstNodeByName("Patient Scan")
         elbowModelNode = slicer.util.getNode("Prosthetic Elbow")
         transformNode = slicer.mrmlScene.GetFirstNodeByName("MasterElbowTransform")
         lineNode = slicer.mrmlScene.GetFirstNodeByName("TrajectoryLine")
@@ -1005,13 +1103,24 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         target_pos = np.array([matrix.GetElement(0, 3), matrix.GetElement(1, 3), matrix.GetElement(2, 3)])
         
         current_scale = np.linalg.norm([matrix.GetElement(0,0), matrix.GetElement(1,0), matrix.GetElement(2,0)])
-        stump_radius = current_scale * 25.0
-        
+        if hasattr(self, "_radiusBottomSlider"):
+            radius_elbow = self._radiusBottomSlider.value
+        else:
+            radius_elbow = current_scale * 27.5
+
+        if hasattr(self, "_radiusTopSlider"):
+            radius_top = self._radiusTopSlider.value
+        else:
+            patientModel = slicer.mrmlScene.GetFirstNodeByName("Patient Scan")
+            armNode = self.ui.armMarkupsWidget.currentNode()
+            _, _, radius_top = self.logic.compute_stump_geometry(armNode, patientModel, fallback_radius=radius_elbow * 1.25)
+
+        overlap_top = self._overlapTopSlider.value if hasattr(self, "_overlapTopSlider") else 15.0
         offset_dist = np.linalg.norm(target_pos - p0)
         wall_thickness = self.ui.wallThicknessSlider.value
         padding_thickness = self.ui.paddingThicknessSlider.value
-        
-        self.logic.generate_prosthetic_socket(patientModel, elbowModelNode, p0, target_pos, offset_dist, stump_radius, wall_thickness, padding_thickness)
+
+        self.logic.generate_prosthetic_socket(patientModel, elbowModelNode, p0, target_pos, offset_dist, radius_top, radius_elbow, wall_thickness, padding_thickness, overlap_top=overlap_top)
 
         self._checkCanApply()
 
@@ -1176,24 +1285,218 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
         slicer.mrmlScene.RemoveNode(resultLm)
         logging.info(f"Connected components: kept label {keepLabel} of {len(labels)} components.")
 
-    def get_alignment_params(self, armLandmarks, offset_distance):
+    def create_tapered_cylinder(self, radius_top: float, radius_bottom: float, height: float, resolution: int = 50) -> vtk.vtkPolyData:
+        """
+        Creates a cylinder with a wider top than base (a truncated cone / frustum).
+        In local coordinates, the axis is along Y from y = -height/2 (top, scan end) to y = +height/2 (bottom, elbow end).
+        """
+        cylinder = vtk.vtkCylinderSource()
+        cylinder.SetRadius(1.0)
+        cylinder.SetHeight(height)
+        cylinder.SetResolution(resolution)
+        cylinder.SetCapping(True)
+        cylinder.Update()
+
+        polyData = vtk.vtkPolyData()
+        polyData.DeepCopy(cylinder.GetOutput())
+
+        points = polyData.GetPoints()
+        numPoints = points.GetNumberOfPoints()
+
+        for i in range(numPoints):
+            x, y, z = points.GetPoint(i)
+            t = (y + (height / 2.0)) / height if height > 0 else 0.0
+            t = max(0.0, min(1.0, t))
+            r = (1.0 - t) * radius_top + t * radius_bottom
+            points.SetPoint(i, x * r, y, z * r)
+
+        points.Modified()
+        polyData.GetPoints().Modified()
+
+        normals = vtk.vtkPolyDataNormals()
+        normals.SetInputData(polyData)
+        normals.ComputePointNormalsOn()
+        normals.ComputeCellNormalsOn()
+        normals.SplittingOff()
+        normals.Update()
+
+        return normals.GetOutput()
+
+    def compute_stump_geometry(self, armLandmarks, patientModelNode=None, fallback_radius=40.0):
+        """
+        Computes robust anatomical stump radius and trajectory using 360-degree mesh slice analysis if available,
+        falling back to 3rd control point or defaults.
+        """
+        if not armLandmarks or armLandmarks.GetNumberOfControlPoints() < 1:
+            return np.zeros(3), np.array([0.0, 0.0, 1.0]), fallback_radius
+
+        p0 = np.zeros(3); armLandmarks.GetNthControlPointPosition(0, p0)
+        
+        # 0. Extract mesh points and identify global torso center of mass
+        all_pts = None
+        torso_center = np.zeros(3)
+        if patientModelNode and patientModelNode.GetPolyData():
+            pts = patientModelNode.GetPolyData().GetPoints()
+            if pts and pts.GetNumberOfPoints() > 100:
+                all_pts = np.array([pts.GetPoint(i) for i in range(pts.GetNumberOfPoints())])
+                torso_center = np.mean(all_pts, axis=0)
+                # Shift skin click p0 to true internal cylinder centerline (average of 80mm cross-section)
+                dists_0 = np.linalg.norm(all_pts - p0, axis=1)
+                near_0 = all_pts[dists_0 <= 80.0]
+                if len(near_0) > 30:
+                    p0 = np.mean(near_0, axis=0)
+                    logging.info(f"Shifted skin click p0 to true internal cylinder centerline: {p0}")
+        
+        # Determine tip (base of amputation where elbow attaches) and shoulder points
+        p_tip = np.copy(p0)
+        if armLandmarks.GetNumberOfControlPoints() >= 2:
+            p1 = np.zeros(3); armLandmarks.GetNthControlPointPosition(1, p1)
+            if all_pts is not None:
+                dists_1 = np.linalg.norm(all_pts - p1, axis=1)
+                near_1 = all_pts[dists_1 <= 80.0]
+                if len(near_1) > 30:
+                    p1 = np.mean(near_1, axis=0)
+            # Identify which point is shoulder (closer to torso center) and which is amputation tip
+            if np.linalg.norm(p0 - torso_center) < np.linalg.norm(p1 - torso_center):
+                p_tip = p1
+                p_shoulder = p0
+            else:
+                p_tip = p0
+                p_shoulder = p1
+            direction_vector = p_tip - p_shoulder
+            norm = np.linalg.norm(direction_vector)
+            direction_vector = direction_vector / norm if norm > 0 else np.array([0.0, 0.0, 1.0])
+        else:
+            # Single-point mode: use torso-to-tip helping vector as robust unrotated initial search axis
+            # Eliminates 90-degree PCA diameter rotation on short/stout residual limbs!
+            direction_vector = p_tip - torso_center
+            norm = np.linalg.norm(direction_vector)
+            direction_vector = direction_vector / norm if norm > 0 else np.array([0.0, 0.0, 1.0])
+            norm = 150.0
+            p1 = p_tip + direction_vector * norm
+
+        stump_radius = None
+        refined_p1 = np.copy(p_tip)
+        refined_dir = np.copy(direction_vector)
+
+        # 1. Marching Cylinder Centerline & Radius Algorithm
+        # March proximally (from tip back into the arm shaft toward shoulder) to sample clean cylinder slices
+        if patientModelNode and patientModelNode.GetPolyData() and all_pts is not None:
+            curr_center = np.copy(p_tip)
+            curr_dir = -np.copy(direction_vector) # March proximally into arm shaft
+            
+            marched_centers = []
+            marched_radii = []
+            
+            step_size = 10.0
+            max_steps = 8
+            
+            for step in range(1, max_steps + 1):
+                pred_center = p_tip + (step * step_size) * curr_dir
+                
+                # Construct local orthogonal vectors for sector angle binning
+                ref = np.array([0.0, 1.0, 0.0])
+                if abs(np.dot(ref, curr_dir)) > 0.9:
+                    ref = np.array([1.0, 0.0, 0.0])
+                u = np.cross(curr_dir, ref); u /= np.linalg.norm(u)
+                w = np.cross(curr_dir, u)
+                
+                # Collect vertices within +-5.0mm slice thickness from predicted step plane
+                v_vecs = all_pts - pred_center
+                z_dists = np.dot(v_vecs, curr_dir)
+                slice_mask = np.abs(z_dists) <= 5.0
+                slice_pts = all_pts[slice_mask]
+                
+                if len(slice_pts) < 20:
+                    break # End of stump reached!
+                    
+                # Calculate orthogonal radial distances from current step axis
+                r_vecs = slice_pts - pred_center - np.outer(np.dot(slice_pts - pred_center, curr_dir), curr_dir)
+                r_dists = np.linalg.norm(r_vecs, axis=1)
+                
+                # Check if we hit torso/shoulder (if more than 30% of slice points have radius > 65mm)
+                if np.mean(r_dists > 65.0) > 0.30:
+                    continue # Skip torso attachment slices
+                    
+                # Filter to realistic anatomical arm radius range (15mm to 65mm)
+                valid_mask = (r_dists >= 15.0) & (r_dists <= 65.0)
+                valid_pts = slice_pts[valid_mask]
+                valid_r = r_dists[valid_mask]
+                valid_r_vecs = r_vecs[valid_mask]
+                
+                if len(valid_pts) < 15:
+                    continue
+                    
+                # 36-sector outer skin boundary filter (ignores inner hollow walls/padding)
+                sector_max_r = [-1.0] * 36
+                sector_pts = [None] * 36
+                for i_pt in range(len(valid_pts)):
+                    ang = math.atan2(np.dot(valid_r_vecs[i_pt], w), np.dot(valid_r_vecs[i_pt], u))
+                    b_idx = int((ang + math.pi) / (2.0 * math.pi) * 36.0) % 36
+                    if valid_r[i_pt] > sector_max_r[b_idx]:
+                        sector_max_r[b_idx] = valid_r[i_pt]
+                        sector_pts[b_idx] = valid_pts[i_pt]
+                        
+                hull_pts = [pt for pt in sector_pts if pt is not None]
+                if len(hull_pts) >= 12:
+                    step_centroid = np.mean(hull_pts, axis=0)
+                    # Radius is median distance of outer skin points from refined slice centroid
+                    step_r = float(np.median([np.linalg.norm(pt - step_centroid - np.dot(pt - step_centroid, curr_dir)*curr_dir) for pt in hull_pts]))
+                    marched_centers.append(step_centroid)
+                    marched_radii.append(step_r)
+                    
+                    # Dynamically curve marching vector along discovered anatomical centerline
+                    if len(marched_centers) >= 2:
+                        new_vec = marched_centers[-1] - marched_centers[0]
+                        if np.linalg.norm(new_vec) > 1e-6:
+                            curr_dir = new_vec / np.linalg.norm(new_vec)
+
+            if len(marched_centers) >= 2:
+                # Trajectory strictly derived from marched slice centroids along the arm!
+                # Since marched_centers[0] is near tip and marched_centers[-1] is up the shaft toward shoulder,
+                # vector from [-1] to [0] points distally out to the elbow target!
+                traj_vec = marched_centers[0] - marched_centers[-1]
+                traj_norm = np.linalg.norm(traj_vec)
+                if traj_norm > 5.0:
+                    refined_dir = traj_vec / traj_norm
+                    if np.dot(refined_dir, direction_vector) < 0:
+                        refined_dir = -refined_dir
+                    refined_p1 = p_tip
+                    stump_radius = float(np.median(marched_radii))
+                    logging.info(f"Marching Algorithm computed trajectory across {len(marched_centers)} slices: r={stump_radius:.2f}mm, length={traj_norm:.1f}mm")
+            elif len(marched_centers) == 1:
+                refined_p1 = p_tip
+                stump_radius = marched_radii[0]
+                logging.info(f"Marching Algorithm found single valid cylinder slice: r={stump_radius:.2f}mm")
+
+        # 2. Override with 3rd control point if present (allowing interactive user override)
+        if armLandmarks.GetNumberOfControlPoints() >= 3:
+            p2 = np.zeros(3); armLandmarks.GetNthControlPointPosition(2, p2)
+            center_to_edge_vector = p2 - p1
+            stump_radius = np.linalg.norm(np.cross(center_to_edge_vector, refined_dir))
+
+        # 3. Fallback default if no mesh and no 3rd point
+        if stump_radius is None or stump_radius <= 0.0:
+            stump_radius = fallback_radius
+
+        return refined_p1, refined_dir, stump_radius
+
+    def get_alignment_params(self, armLandmarks, offset_distance, patientModelNode=None):
         """Calculates trajectory, rotation axes, and scale mathematically."""
         p0 = np.zeros(3); armLandmarks.GetNthControlPointPosition(0, p0)
-        p1 = np.zeros(3); armLandmarks.GetNthControlPointPosition(1, p1)
-        p2 = np.zeros(3); armLandmarks.GetNthControlPointPosition(2, p2)
+        p1, direction_vector, stump_radius = self.compute_stump_geometry(armLandmarks, patientModelNode, fallback_radius=40.0)
 
-        direction_vector = p1 - p0
-        norm = np.linalg.norm(direction_vector)
-        direction_vector = direction_vector / norm if norm > 0 else np.array([0,0,1])
-
-        center_to_edge_vector = p2 - p1
-        stump_radius = np.linalg.norm(np.cross(center_to_edge_vector, direction_vector))
-        scale_factor = stump_radius / 25.0
+        scale_factor = (stump_radius / 1.25) / 27.5
 
         elbow_target_pos = p1 + (direction_vector * offset_distance)
 
         z_axis = direction_vector
-        y_axis = np.cross(z_axis, center_to_edge_vector)
+        y_axis = np.cross(z_axis, np.array([1, 0, 0])) if abs(z_axis[0]) < 0.9 else np.cross(z_axis, np.array([0, 1, 0]))
+        if armLandmarks.GetNumberOfControlPoints() >= 3:
+            p2 = np.zeros(3); armLandmarks.GetNthControlPointPosition(2, p2)
+            center_to_edge_vector = p2 - p1
+            if np.linalg.norm(np.cross(center_to_edge_vector, z_axis)) > 1e-6:
+                y_axis = np.cross(z_axis, center_to_edge_vector)
         norm_y = np.linalg.norm(y_axis)
         y_axis = y_axis / norm_y if norm_y > 0 else np.array([0,1,0])
         x_axis = np.cross(y_axis, z_axis)
@@ -1202,11 +1505,11 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
         return elbow_target_pos, p1, z_axis, y_axis, x_axis, scale_factor, stump_radius
 
     def process(self, patientModelNode, armLandmarks, elbowModelNode, offset_distance, wall_thickness=4.0) -> None:
-        if armLandmarks.GetNumberOfControlPoints() < 3:
-            logging.error("Please place exactly 3 points.")
+        if armLandmarks.GetNumberOfControlPoints() < 1:
+            logging.error("Please place at least 1 point.")
             return
         
-        target_pos, p1, z_axis, y_axis, x_axis, scale, stump_radius = self.get_alignment_params(armLandmarks, offset_distance)
+        target_pos, p1, z_axis, y_axis, x_axis, scale, stump_radius = self.get_alignment_params(armLandmarks, offset_distance, patientModelNode)
 
         # Ensure elbow transform exists (in case user skipped preview)
         transformNode = slicer.mrmlScene.GetFirstNodeByName("MasterElbowTransform")
@@ -1228,24 +1531,31 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
             transformNode.SetMatrixTransformToParent(transform.GetMatrix())
             elbowModelNode.SetAndObserveTransformNodeID(transformNode.GetID())
             
-        self.generate_prosthetic_socket(patientModelNode, elbowModelNode, p1, target_pos, offset_distance, stump_radius, wall_thickness)
+        matrix = vtk.vtkMatrix4x4()
+        transformNode.GetMatrixTransformToParent(matrix)
+        current_scale = np.linalg.norm([matrix.GetElement(0,0), matrix.GetElement(1,0), matrix.GetElement(2,0)])
+        radius_elbow = current_scale * 27.5
+            
+        self.generate_prosthetic_socket(patientModelNode, elbowModelNode, p1, target_pos, offset_distance, stump_radius, radius_elbow, wall_thickness)
 
-    def generate_prosthetic_socket(self, patientModelNode, elbowModelNode, p1_stump_center, elbow_target_pos, offset_distance, stump_radius, wall_thickness=4.0, padding_thickness=0.0):
+    def generate_prosthetic_socket(self, patientModelNode, elbowModelNode, p1_stump_center, elbow_target_pos, offset_distance, radius_top, radius_elbow, wall_thickness=4.0, padding_thickness=0.0, overlap_top=15.0):
         import SimpleITK as sitk
         import sitkUtils
 
-        logging.info("Generating bridging cylinder...")
+        logging.info("Generating bridging cone/tapered cylinder...")
 
-        overlap_top = 50.0
         overlap_bottom = 15.0
-        total_height = offset_distance + overlap_top + overlap_bottom
+        height_main = offset_distance + overlap_top
+        total_height = height_main + overlap_bottom
 
-        cylinder = vtk.vtkCylinderSource()
-        cylinder.SetRadius(stump_radius * 1.1)
-        cylinder.SetHeight(total_height)
-        cylinder.SetResolution(50)
-        cylinder.SetCapping(True)
-        cylinder.Update()
+        if height_main > 1e-6:
+            slope = (radius_top - radius_elbow) / height_main
+            radius_bottom = radius_elbow - (slope * overlap_bottom)
+        else:
+            radius_bottom = radius_elbow
+        radius_bottom = max(0.1, radius_bottom)
+
+        conePolyData = self.create_tapered_cylinder(radius_top, radius_bottom, total_height, 50)
 
         direction = elbow_target_pos - p1_stump_center
         direction = direction / np.linalg.norm(direction)
@@ -1269,7 +1579,7 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
         cylTransform.RotateWXYZ(angle_deg, rotation_axis.tolist())
 
         tf = vtk.vtkTransformPolyDataFilter()
-        tf.SetInputData(cylinder.GetOutput())
+        tf.SetInputData(conePolyData)
         tf.SetTransform(cylTransform)
         tf.Update()
 
