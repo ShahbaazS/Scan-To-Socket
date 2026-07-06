@@ -208,7 +208,7 @@ p, li { white-space: pre-wrap; }
          <double>500</double>
         </property>
         <property name="value">
-         <double>50</double>
+         <double>330</double>
         </property>
         <property name="singleStep">
          <double>1</double>
@@ -218,6 +218,66 @@ p, li { white-space: pre-wrap; }
         </property>
         <property name="decimals">
          <double>1</double>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="distanceReadoutGroupBox">
+     <property name="title">
+      <string>Alignment Measurements (Read-Only)</string>
+     </property>
+     <layout class="QFormLayout" name="formLayout_readout">
+      <item row="0" column="0">
+       <widget class="QLabel" name="stumpLengthLabel">
+        <property name="text">
+         <string>Detected Stump Length:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QLabel" name="stumpLengthValueLabel">
+        <property name="text">
+         <string>0.0 mm</string>
+        </property>
+        <property name="styleSheet">
+         <string notr="true">font-weight: bold; color: #2ecc71;</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="extensionDistanceLabel">
+        <property name="text">
+         <string>Resulting Extension Distance:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLabel" name="extensionDistanceValueLabel">
+        <property name="text">
+         <string>0.0 mm</string>
+        </property>
+        <property name="styleSheet">
+         <string notr="true">font-weight: bold; color: #3498db;</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="elbowWidthLabel">
+        <property name="text">
+         <string>Resulting Elbow Width:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QLabel" name="elbowWidthValueLabel">
+        <property name="text">
+         <string>0.0 mm</string>
+        </property>
+        <property name="styleSheet">
+         <string notr="true">font-weight: bold; color: #e67e22;</string>
         </property>
        </widget>
       </item>

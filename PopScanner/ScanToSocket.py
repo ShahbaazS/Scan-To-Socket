@@ -216,24 +216,6 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         exportButtonIndex = containerLayout.indexOf(self.ui.exportSTLButton)
         containerLayout.insertWidget(exportButtonIndex, cropGroupBox)
 
-        # Live elbow width counter shown below the shoulder-to-elbow distance control
-        self._elbowWidthLabel = qt.QLabel("Elbow Width: -- mm")
-        self._elbowWidthLabel.setAlignment(qt.Qt.AlignCenter)
-        self._elbowWidthLabel.setStyleSheet("margin-bottom: 4px;")
-        distanceIndex = containerLayout.indexOf(self.ui.shoulderDistanceWidget)
-        if distanceIndex != -1:
-            containerLayout.insertWidget(distanceIndex + 1, self._elbowWidthLabel)
-        else:
-            paddingIndex = containerLayout.indexOf(self.ui.paddingThicknessWidget)
-            if paddingIndex != -1:
-                containerLayout.insertWidget(paddingIndex + 1, self._elbowWidthLabel)
-            else:
-                exportButtonIndex = containerLayout.indexOf(self.ui.exportSTLButton)
-                if exportButtonIndex != -1:
-                    containerLayout.insertWidget(exportButtonIndex, self._elbowWidthLabel)
-                else:
-                    containerLayout.addWidget(self._elbowWidthLabel)
-
         self._startCropBtn.connect("clicked(bool)", self.onStartCrop)
         self._doneCropBtn.connect("clicked(bool)", self.onDoneCrop)
         self._cancelCropBtn.connect("clicked(bool)", self.onCancelCrop)
@@ -441,15 +423,15 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             self.onPreviewElbow()
 
     def _checkCanApply(self, caller=None, event=None) -> None:
-        # Logic: Only enable if we have an input file AND the patient arm has at least 1 point
-        armReady = self.ui.armMarkupsWidget.currentNode() and self.ui.armMarkupsWidget.currentNode().GetNumberOfControlPoints() >= 1
+        # Logic: Only enable if we have an input file AND the patient arm has at least 2 points
+        armReady = self.ui.armMarkupsWidget.currentNode() and self.ui.armMarkupsWidget.currentNode().GetNumberOfControlPoints() >= 2
         
         if self._parameterNode and self._parameterNode.inputFilePath and armReady:
             self.ui.applyButton.text = _("Generate Prosthetic Socket")
             self.ui.applyButton.enabled = True
             self._previewBtn.setEnabled(True)
         else:
-            self.ui.applyButton.text = _("Place at least 1 point on Patient Arm (Base)")
+            self.ui.applyButton.text = _("Place at least 2 points on Patient Arm (Shoulder, Tip)")
             self.ui.applyButton.enabled = False
             self._previewBtn.setEnabled(False)
         
@@ -472,8 +454,8 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         armNode = self.ui.armMarkupsWidget.currentNode()
         prostheticModel = slicer.util.getNode("Prosthetic Elbow")
         
-        if not prostheticModel or not armNode or armNode.GetNumberOfControlPoints() < 1:
-            slicer.util.errorDisplay("Make sure 'Patient Scan' is loaded and at least 1 point is placed.")
+        if not prostheticModel or not armNode or armNode.GetNumberOfControlPoints() < 2:
+            slicer.util.errorDisplay("Make sure 'Patient Scan' is loaded and at least 2 points are placed (Point 1: Shoulder, Point 2: Amputation Tip).")
             return
 
         self._previewActive = True
@@ -481,7 +463,9 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         dist = self.ui.shoulderDistanceSlider.value
         patientModel = slicer.mrmlScene.GetFirstNodeByName("Patient Scan")
-        target_pos, p1, z_axis, y_axis, x_axis, scale, stump_radius = self.logic.get_alignment_params(armNode, dist, patientModel)
+        target_pos, p1, z_axis, y_axis, x_axis, scale, stump_radius, stump_length = self.logic.get_alignment_params(armNode, dist, patientModel)
+        self._stumpLength = stump_length
+        self._updateDistanceReadouts()
 
         # 1. Setup Master Transform & Gizmos
         transformNode = slicer.mrmlScene.GetFirstNodeByName("MasterElbowTransform")
@@ -563,7 +547,7 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             p0 = np.zeros(3); lineNode.GetNthControlPointPosition(0, p0)
             dist = np.linalg.norm(np.array(p1) - p0)
             self.ui.shoulderDistanceSlider.blockSignals(True)
-            self.ui.shoulderDistanceSlider.setValue(dist)
+            self.ui.shoulderDistanceSlider.setValue(dist + getattr(self, "_stumpLength", 0.0))
             self.ui.shoulderDistanceSlider.blockSignals(False)
 
             if hasattr(self, "_radiusBottomSlider"):
@@ -573,6 +557,7 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                 self._radiusBottomSlider.blockSignals(False)
 
             self._redrawPreviewCylinder()
+            self._updateDistanceReadouts()
         finally:
             self._isUpdating = False
 
@@ -599,10 +584,11 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             p0 = np.zeros(3); lineNode.GetNthControlPointPosition(0, p0)
             dist = np.linalg.norm(p1 - p0)
             self.ui.shoulderDistanceSlider.blockSignals(True)
-            self.ui.shoulderDistanceSlider.setValue(dist)
+            self.ui.shoulderDistanceSlider.setValue(dist + getattr(self, "_stumpLength", 0.0))
             self.ui.shoulderDistanceSlider.blockSignals(False)
 
             self._redrawPreviewCylinder()
+            self._updateDistanceReadouts()
         finally:
             self._isUpdating = False
 
@@ -620,10 +606,25 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         norm = np.linalg.norm(direction)
         if norm < 1e-6: return
         
-        new_p1 = p0 + ((direction / norm) * val)
+        ext_len = max(10.0, val - getattr(self, "_stumpLength", 0.0))
+        new_p1 = p0 + ((direction / norm) * ext_len)
         
         # Updating the line triggers the Observer, which moves the elbow & redraws the cylinder
         lineNode.SetNthControlPointPosition(1, new_p1[0], new_p1[1], new_p1[2])
+        self._updateDistanceReadouts()
+
+    def _updateDistanceReadouts(self) -> None:
+        """Updates the read-only Stump Length, Extension Distance, and Elbow Width labels in the UI."""
+        if not hasattr(self.ui, "stumpLengthValueLabel") or not hasattr(self.ui, "extensionDistanceValueLabel"):
+            return
+        stump_len = getattr(self, "_stumpLength", 0.0)
+        total_dist = self.ui.shoulderDistanceSlider.value
+        ext_len = max(0.0, total_dist - stump_len)
+        self.ui.stumpLengthValueLabel.text = f"{stump_len:.1f} mm"
+        self.ui.extensionDistanceValueLabel.text = f"{ext_len:.1f} mm"
+        
+        if hasattr(self, "_updateElbowWidthLabel"):
+            self._updateElbowWidthLabel()
 
     def _onConeSliderChanged(self, value=None) -> None:
         """Fires if the user changes any of the bridging cone sliders."""
@@ -650,6 +651,7 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                         matrix.SetElement(2, col, vec[2])
                 transformNode.SetMatrixTransformToParent(matrix)
             self._redrawPreviewCylinder()
+            self._updateDistanceReadouts()
         finally:
             self._isUpdatingSliders = False
 
@@ -763,10 +765,19 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
     def _updateElbowWidthLabel(self) -> None:
         width_mm = self._getCurrentElbowWidthMm()
-        if width_mm is None:
-            self._elbowWidthLabel.setText("Elbow Width: -- mm")
-        else:
-            self._elbowWidthLabel.setText(f"Elbow Width: {width_mm:.1f} mm")
+        if width_mm is None and hasattr(self, "_radiusBottomSlider"):
+            width_mm = 2.0 * self._radiusBottomSlider.value
+            
+        if hasattr(self.ui, "elbowWidthValueLabel"):
+            if width_mm is None:
+                self.ui.elbowWidthValueLabel.text = "-- mm"
+            else:
+                self.ui.elbowWidthValueLabel.text = f"{width_mm:.1f} mm"
+        elif hasattr(self, "_elbowWidthLabel"):
+            if width_mm is None:
+                self._elbowWidthLabel.setText("Elbow Width: -- mm")
+            else:
+                self._elbowWidthLabel.setText(f"Elbow Width: {width_mm:.1f} mm")
 
     def _updateElbowWidthLine(self) -> None:
         prostheticModel = slicer.util.getNode("Prosthetic Elbow")
@@ -1327,8 +1338,9 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
         Computes robust anatomical stump radius and trajectory using 360-degree mesh slice analysis if available,
         falling back to 3rd control point or defaults.
         """
-        if not armLandmarks or armLandmarks.GetNumberOfControlPoints() < 1:
-            return np.zeros(3), np.array([0.0, 0.0, 1.0]), fallback_radius
+        if not armLandmarks or armLandmarks.GetNumberOfControlPoints() < 2:
+            logging.error("Please place at least 2 points: Point 1 on Shoulder, Point 2 on Amputation Tip.")
+            return np.zeros(3), np.array([0.0, 0.0, 1.0]), fallback_radius, 0.0
 
         p0 = np.zeros(3); armLandmarks.GetNthControlPointPosition(0, p0)
         
@@ -1346,11 +1358,14 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
                 if len(near_0) > 30:
                     p0 = np.mean(near_0, axis=0)
                     logging.info(f"Shifted skin click p0 to true internal cylinder centerline: {p0}")
-        
+
         # Determine tip (base of amputation where elbow attaches) and shoulder points
         p_tip = np.copy(p0)
+        raw_tip = np.zeros(3); armLandmarks.GetNthControlPointPosition(0, raw_tip)
+        raw_shoulder = None
         if armLandmarks.GetNumberOfControlPoints() >= 2:
             p1 = np.zeros(3); armLandmarks.GetNthControlPointPosition(1, p1)
+            raw_p1 = np.copy(p1)
             if all_pts is not None:
                 dists_1 = np.linalg.norm(all_pts - p1, axis=1)
                 near_1 = all_pts[dists_1 <= 80.0]
@@ -1360,11 +1375,15 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
             if np.linalg.norm(p0 - torso_center) < np.linalg.norm(p1 - torso_center):
                 p_tip = p1
                 p_shoulder = p0
+                raw_tip = np.copy(raw_p1)
+                raw_shoulder = np.zeros(3); armLandmarks.GetNthControlPointPosition(0, raw_shoulder)
             else:
                 p_tip = p0
                 p_shoulder = p1
+                raw_shoulder = np.copy(raw_p1)
             direction_vector = p_tip - p_shoulder
             norm = np.linalg.norm(direction_vector)
+            stump_length = float(norm)
             direction_vector = direction_vector / norm if norm > 0 else np.array([0.0, 0.0, 1.0])
         else:
             # Single-point mode: use torso-to-tip helping vector as robust unrotated initial search axis
@@ -1374,6 +1393,7 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
             direction_vector = direction_vector / norm if norm > 0 else np.array([0.0, 0.0, 1.0])
             norm = 150.0
             p1 = p_tip + direction_vector * norm
+            stump_length = 0.0
 
         stump_radius = None
         refined_p1 = np.copy(p_tip)
@@ -1453,8 +1473,6 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
 
             if len(marched_centers) >= 2:
                 # Trajectory strictly derived from marched slice centroids along the arm!
-                # Since marched_centers[0] is near tip and marched_centers[-1] is up the shaft toward shoulder,
-                # vector from [-1] to [0] points distally out to the elbow target!
                 traj_vec = marched_centers[0] - marched_centers[-1]
                 traj_norm = np.linalg.norm(traj_vec)
                 if traj_norm > 5.0:
@@ -1479,16 +1497,24 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
         if stump_radius is None or stump_radius <= 0.0:
             stump_radius = fallback_radius
 
-        return refined_p1, refined_dir, stump_radius
+        # 4. Measure stump_length by projecting the user's raw fiducials onto the PCA trajectory line
+        if 'raw_shoulder' in locals() and raw_shoulder is not None:
+            stump_length = float(abs(np.dot(raw_tip - raw_shoulder, refined_dir)))
+
+        return refined_p1, refined_dir, stump_radius, stump_length
 
     def get_alignment_params(self, armLandmarks, offset_distance, patientModelNode=None):
         """Calculates trajectory, rotation axes, and scale mathematically."""
         p0 = np.zeros(3); armLandmarks.GetNthControlPointPosition(0, p0)
-        p1, direction_vector, stump_radius = self.compute_stump_geometry(armLandmarks, patientModelNode, fallback_radius=40.0)
+        p1, direction_vector, stump_radius, stump_length = self.compute_stump_geometry(armLandmarks, patientModelNode, fallback_radius=40.0)
 
         scale_factor = (stump_radius / 1.25) / 27.5
 
-        elbow_target_pos = p1 + (direction_vector * offset_distance)
+        # offset_distance is the total Shoulder-to-Elbow distance.
+        # Since p1 is at the stump tip (at distance stump_length from shoulder along the trajectory),
+        # the remaining extension from stump tip p1 to the elbow target is offset_distance - stump_length.
+        extension_distance = max(10.0, offset_distance - stump_length)
+        elbow_target_pos = p1 + (direction_vector * extension_distance)
 
         z_axis = direction_vector
         y_axis = np.cross(z_axis, np.array([1, 0, 0])) if abs(z_axis[0]) < 0.9 else np.cross(z_axis, np.array([0, 1, 0]))
@@ -1502,14 +1528,14 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
         x_axis = np.cross(y_axis, z_axis)
         x_axis = x_axis / np.linalg.norm(x_axis)
 
-        return elbow_target_pos, p1, z_axis, y_axis, x_axis, scale_factor, stump_radius
+        return elbow_target_pos, p1, z_axis, y_axis, x_axis, scale_factor, stump_radius, stump_length
 
     def process(self, patientModelNode, armLandmarks, elbowModelNode, offset_distance, wall_thickness=4.0) -> None:
-        if armLandmarks.GetNumberOfControlPoints() < 1:
-            logging.error("Please place at least 1 point.")
+        if armLandmarks.GetNumberOfControlPoints() < 2:
+            logging.error("Please place at least 2 points (Point 1: Shoulder, Point 2: Amputation Tip).")
             return
         
-        target_pos, p1, z_axis, y_axis, x_axis, scale, stump_radius = self.get_alignment_params(armLandmarks, offset_distance, patientModelNode)
+        target_pos, p1, z_axis, y_axis, x_axis, scale, stump_radius, stump_length = self.get_alignment_params(armLandmarks, offset_distance, patientModelNode)
 
         # Ensure elbow transform exists (in case user skipped preview)
         transformNode = slicer.mrmlScene.GetFirstNodeByName("MasterElbowTransform")
@@ -1536,7 +1562,8 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
         current_scale = np.linalg.norm([matrix.GetElement(0,0), matrix.GetElement(1,0), matrix.GetElement(2,0)])
         radius_elbow = current_scale * 27.5
             
-        self.generate_prosthetic_socket(patientModelNode, elbowModelNode, p1, target_pos, offset_distance, stump_radius, radius_elbow, wall_thickness)
+        ext_dist = np.linalg.norm(np.array(target_pos) - np.array(p1))
+        self.generate_prosthetic_socket(patientModelNode, elbowModelNode, p1, target_pos, ext_dist, stump_radius, radius_elbow, wall_thickness)
 
     def generate_prosthetic_socket(self, patientModelNode, elbowModelNode, p1_stump_center, elbow_target_pos, offset_distance, radius_top, radius_elbow, wall_thickness=4.0, padding_thickness=0.0, overlap_top=15.0):
         import SimpleITK as sitk
