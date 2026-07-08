@@ -19,6 +19,8 @@ from slicer.parameterNodeWrapper import (
     WithinRange,
 )
 from slicer import vtkMRMLMarkupsFiducialNode
+from vtkSlicerSegmentationsModuleMRMLPython import vtkSegmentationConverter
+
 
 from slicer import vtkMRMLScalarVolumeNode
 
@@ -1000,6 +1002,10 @@ class ScanToSocketWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         segID = segmentation.GetNthSegmentID(0)
 
         # Pull polydata from the crop
+        segmentation.SetConversionParameter("Decimation factor", "0.3")
+        segmentation.SetConversionParameter("Smoothing factor", "0.8")
+        segmentation.RemoveRepresentation(vtkSegmentationConverter.GetSegmentationClosedSurfaceRepresentationName())
+        
         self._cropSegNode.CreateClosedSurfaceRepresentation()
         croppedPoly = vtk.vtkPolyData()
         self._cropSegNode.GetClosedSurfaceRepresentation(segID, croppedPoly)
@@ -1682,6 +1688,9 @@ class ScanToSocketLogic(ScriptedLoadableModuleLogic):
         self._smooth_segment(resultSegNode, outSegID, gaussian_sigma_mm=0.6)
 
         # 1. Extract Socket Polydata
+        outSegmentation.SetConversionParameter("Decimation factor", "0.3")
+        outSegmentation.SetConversionParameter("Smoothing factor", "0.8")
+        outSegmentation.RemoveRepresentation(vtkSegmentationConverter.GetSegmentationClosedSurfaceRepresentationName())
         resultSegNode.CreateClosedSurfaceRepresentation()
         socketPoly = vtk.vtkPolyData()
         resultSegNode.GetClosedSurfaceRepresentation(outSegID, socketPoly)
